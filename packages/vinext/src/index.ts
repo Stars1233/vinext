@@ -1697,6 +1697,19 @@ hydrate();
             process.env[key] = value;
           }
         }
+        // Align NODE_ENV with Next.js semantics: build -> production, serve -> development.
+        // Next.js unconditionally forces NODE_ENV during build/dev, so we do the same.
+        let resolvedNodeEnv: string;
+        if (mode === "test") {
+          resolvedNodeEnv = "test";
+        } else if (env?.command === "build") {
+          resolvedNodeEnv = "production";
+        } else {
+          resolvedNodeEnv = "development";
+        }
+        if (process.env.NODE_ENV !== resolvedNodeEnv) {
+          process.env.NODE_ENV = resolvedNodeEnv;
+        }
 
         // Resolve the base directory for app/pages detection.
         // If appDir is provided, resolve it (supports both relative and absolute paths).
@@ -1735,7 +1748,17 @@ hydrate();
 
         // Merge env from next.config.js with NEXT_PUBLIC_* env vars
         const defines = getNextPublicEnvDefines();
+        if (
+          !config.define ||
+          typeof config.define !== "object" ||
+          !("process.env.NODE_ENV" in config.define)
+        ) {
+          defines["process.env.NODE_ENV"] = JSON.stringify(resolvedNodeEnv);
+        }
         for (const [key, value] of Object.entries(nextConfig.env)) {
+          // Skip NODE_ENV from next.config.js env — Next.js ignores it too,
+          // and it would silently override the value we just set above.
+          if (key === "NODE_ENV") continue;
           defines[`process.env.${key}`] = JSON.stringify(value);
         }
         // Expose basePath to client-side code

@@ -2947,6 +2947,36 @@ hydrate();
         };
       },
     },
+    // Strip server-only data-fetching exports (getServerSideProps, getStaticProps,
+    // getStaticPaths) from page modules in the client bundle. These functions
+    // often import server-only modules (database drivers, fs, etc.) that would
+    // break or bloat the client bundle. Next.js does this via an SWC transform
+    // (next-ssg-transform); we use Vite's parseAst + MagicString.
+    //
+    // Only applies to client builds (not SSR) and only to files under the
+    // pages/ directory.
+    {
+      name: "vinext:strip-server-exports",
+      transform: {
+        // Only match page source files, not node_modules
+        filter: { id: /\.(tsx?|jsx?|mjs)$/ },
+        handler(code, id) {
+          const ssr = this.environment?.name !== "client";
+          if (ssr) return null;
+          if (!hasPagesDir) return null;
+          // Only transform files under the pages/ directory
+          if (!id.startsWith(pagesDir)) return null;
+          // Skip API routes, _app, _document, _error
+          const relativePath = id.slice(pagesDir.length);
+          if (relativePath.startsWith("/api/") || relativePath === "/api") return null;
+          if (/\/_(?:app|document|error)\b/.test(relativePath)) return null;
+
+          const result = stripServerExports(code);
+          if (!result) return null;
+          return { code: result, map: null };
+        },
+      },
+    },
     // Local image import transform:
     // When a source file imports a local image (e.g., `import hero from './hero.jpg'`),
     // this plugin transforms the default import to a StaticImageData object with
@@ -3677,6 +3707,102 @@ function extractConstraint(str: string, re: RegExp): string | null {
  *   :param+    — matches one or more segments
  *   (regex)    — inline regex patterns in the source
  */
+/**
+ * Strip server-only data-fetching exports from a page module's source code.
+ * Returns the transformed code, or null if no changes were made.
+ *
+ * Handles:
+ * - export (async) function getServerSideProps(...) { ... }
+ * - export const getStaticProps = async (...) => { ... }
+ * - export const getServerSideProps = someHelper;
+ */
+/**
+ * Skip past balanced brackets/parens/braces starting at `pos` (which should
+ * point to the opening bracket). Returns the position AFTER the closing bracket.
+ * Handles nested brackets, string literals, and comments.
+ */
+/**
+ * Strip server-only data-fetching exports (getServerSideProps,
+ * getStaticProps, getStaticPaths) from page modules for the client
+ * bundle. Uses Vite's parseAst (Rollup/acorn) for correct handling
+ * of all export patterns including function expressions, arrow
+ * functions with TS return types, and re-exports.
+ *
+ * Modeled after Next.js's SWC `next-ssg-transform`.
+ */
+function stripServerExports(code: string): string | null {
+  const SERVER_EXPORTS = new Set(["getServerSideProps", "getStaticProps", "getStaticPaths"]);
+  if (![...SERVER_EXPORTS].some(name => code.includes(name))) return null;
+
+  let ast: ReturnType<typeof parseAst>;
+  try {
+    ast = parseAst(code);
+  } catch {
+    // If parsing fails (shouldn't happen post-JSX/TS transform), bail out
+    return null;
+  }
+
+  const s = new MagicString(code);
+  let changed = false;
+
+  for (const node of ast.body as any[]) {
+    if (node.type !== "ExportNamedDeclaration") continue;
+
+    // Case 1: export function name() {} / export async function name() {}
+    // Case 2: export const/let/var name = ...
+    if (node.declaration) {
+      const decl = node.declaration;
+      if (decl.type === "FunctionDeclaration" && SERVER_EXPORTS.has(decl.id?.name)) {
+        s.overwrite(node.start, node.end, `export function ${decl.id.name}() { return { props: {} }; }`);
+        changed = true;
+      } else if (decl.type === "VariableDeclaration") {
+        for (const declarator of decl.declarations) {
+          if (declarator.id?.type === "Identifier" && SERVER_EXPORTS.has(declarator.id.name)) {
+            s.overwrite(node.start, node.end, `export const ${declarator.id.name} = undefined;`);
+            changed = true;
+          }
+        }
+      }
+      continue;
+    }
+
+    // Case 3: export { getServerSideProps } or export { getServerSideProps as gSSP }
+    if (node.specifiers && node.specifiers.length > 0 && !node.source) {
+      const kept: any[] = [];
+      const stripped: string[] = [];
+      for (const spec of node.specifiers) {
+        // spec.local.name is the binding name, spec.exported.name is the export name
+        const exportedName = spec.exported?.name ?? spec.exported?.value;
+        if (SERVER_EXPORTS.has(exportedName)) {
+          stripped.push(exportedName);
+        } else {
+          kept.push(spec);
+        }
+      }
+      if (stripped.length > 0) {
+        // Build replacement: keep non-server specifiers, add stubs for stripped ones
+        const parts: string[] = [];
+        if (kept.length > 0) {
+          const keptStr = kept.map((sp: any) => {
+            const local = sp.local.name;
+            const exported = sp.exported?.name ?? sp.exported?.value;
+            return local === exported ? local : `${local} as ${exported}`;
+          }).join(", ");
+          parts.push(`export { ${keptStr} };`);
+        }
+        for (const name of stripped) {
+          parts.push(`export const ${name} = undefined;`);
+        }
+        s.overwrite(node.start, node.end, parts.join("\n"));
+        changed = true;
+      }
+    }
+  }
+
+  if (!changed) return null;
+  return s.toString();
+}
+
 export function matchConfigPattern(
   pathname: string,
   pattern: string,
@@ -3967,3 +4093,4 @@ export type { StaticExportResult, StaticExportOptions, AppStaticExportOptions } 
 export { clientManualChunks, clientOutputConfig, clientTreeshakeConfig, computeLazyChunks };
 export { resolvePostcssStringPlugins as _resolvePostcssStringPlugins };
 export { parseStaticObjectLiteral as _parseStaticObjectLiteral };
+export { stripServerExports as _stripServerExports };

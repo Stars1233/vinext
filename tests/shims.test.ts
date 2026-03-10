@@ -540,6 +540,25 @@ describe("next/server shim", () => {
     expect(res.headers.get("x-middleware-rewrite")).toBe("https://example.com/internal");
   });
 
+  it("NextResponse.rewrite() forwards request header overrides", async () => {
+    const { NextResponse } = await import("../packages/vinext/src/shims/server.js");
+    const forwardedHeaders = new Headers({
+      cookie: "a=1",
+      "x-added": "1",
+    });
+
+    const res = NextResponse.rewrite("https://example.com/internal", {
+      request: {
+        headers: forwardedHeaders,
+      },
+    });
+
+    expect(res.headers.get("x-middleware-rewrite")).toBe("https://example.com/internal");
+    expect(res.headers.get("x-middleware-override-headers")).toBe("cookie,x-added");
+    expect(res.headers.get("x-middleware-request-cookie")).toBe("a=1");
+    expect(res.headers.get("x-middleware-request-x-added")).toBe("1");
+  });
+
   it("NextResponse.next() sets x-middleware-next header", async () => {
     const { NextResponse } = await import("../packages/vinext/src/shims/server.js");
     const res = NextResponse.next();
@@ -2724,6 +2743,137 @@ describe("NextResponse.next() request header forwarding", () => {
     expect(res.headers.get("x-middleware-next")).toBe("1");
     expect(res.headers.get("x-middleware-request-x-custom-header")).toBe("custom-value");
     expect(res.headers.get("x-middleware-request-authorization")).toBe("Bearer token123");
+  });
+
+  it("serializes the full override set so omitted headers can be deleted downstream", async () => {
+    const { NextResponse } = await import("../packages/vinext/src/shims/server.js");
+
+    const forwardedHeaders = new Headers({
+      "x-custom-header": "custom-value",
+      "x-added": "1",
+    });
+
+    const res = NextResponse.next({
+      request: {
+        headers: forwardedHeaders,
+      },
+    });
+
+    const overrideHeaders = res.headers.get("x-middleware-override-headers");
+    expect(overrideHeaders).not.toBeNull();
+    expect(overrideHeaders!.split(",").sort()).toEqual([...forwardedHeaders.keys()].sort());
+    expect(res.headers.get("x-middleware-request-x-custom-header")).toBe("custom-value");
+    expect(res.headers.get("x-middleware-request-x-added")).toBe("1");
+  });
+});
+
+describe("middleware request header overrides", () => {
+  // Ported from Next.js: test/e2e/middleware-request-header-overrides/test/index.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-request-header-overrides/test/index.test.ts
+  it("config-matchers applyMiddlewareRequestHeaders deletes omitted headers from the request", async () => {
+    const { applyMiddlewareRequestHeaders } =
+      await import("../packages/vinext/src/config/config-matchers.js");
+
+    const middlewareHeaders: Record<string, string> = {
+      "x-middleware-override-headers": "x-keep,x-added",
+      "x-middleware-request-x-keep": "updated",
+      "x-middleware-request-x-added": "1",
+      "x-middleware-next": "1",
+    };
+
+    const request = new Request("http://localhost/test", {
+      headers: {
+        authorization: "Bearer secret",
+        cookie: "a=1; b=2",
+        "x-keep": "original",
+      },
+    });
+
+    const { request: nextRequest, postMwReqCtx } = applyMiddlewareRequestHeaders(
+      middlewareHeaders,
+      request,
+    );
+
+    expect(nextRequest.headers.get("authorization")).toBeNull();
+    expect(nextRequest.headers.get("cookie")).toBeNull();
+    expect(nextRequest.headers.get("x-keep")).toBe("updated");
+    expect(nextRequest.headers.get("x-added")).toBe("1");
+    expect(Object.keys(postMwReqCtx.cookies)).toEqual([]);
+    expect(middlewareHeaders).toEqual({});
+  });
+
+  it("config-matchers applyMiddlewareRequestHeaders preserves existing headers in add-only overrides", async () => {
+    const { applyMiddlewareRequestHeaders } =
+      await import("../packages/vinext/src/config/config-matchers.js");
+
+    const request = new Request("http://localhost/test", {
+      headers: {
+        authorization: "Bearer secret",
+        cookie: "a=1; b=2",
+        "x-keep": "original",
+      },
+    });
+
+    const forwardedHeaders = new Headers(request.headers);
+    forwardedHeaders.set("x-added", "1");
+
+    const middlewareHeaders: Record<string, string> = {
+      "x-middleware-override-headers": [...forwardedHeaders.keys()].join(","),
+      "x-middleware-request-authorization": forwardedHeaders.get("authorization")!,
+      "x-middleware-request-cookie": forwardedHeaders.get("cookie")!,
+      "x-middleware-request-x-keep": forwardedHeaders.get("x-keep")!,
+      "x-middleware-request-x-added": "1",
+      "x-middleware-next": "1",
+    };
+
+    const { request: nextRequest, postMwReqCtx } = applyMiddlewareRequestHeaders(
+      middlewareHeaders,
+      request,
+    );
+
+    expect(nextRequest.headers.get("authorization")).toBe("Bearer secret");
+    expect(nextRequest.headers.get("cookie")).toBe("a=1; b=2");
+    expect(nextRequest.headers.get("x-keep")).toBe("original");
+    expect(nextRequest.headers.get("x-added")).toBe("1");
+    expect(postMwReqCtx.cookies).toEqual({ a: "1", b: "2" });
+    expect(middlewareHeaders).toEqual({});
+  });
+
+  it("next/headers applyMiddlewareRequestHeaders replaces the live request header set", async () => {
+    const {
+      applyMiddlewareRequestHeaders,
+      cookies,
+      headers,
+      headersContextFromRequest,
+      runWithHeadersContext,
+    } = await import("../packages/vinext/src/shims/headers.js");
+
+    const request = new Request("http://localhost/test", {
+      headers: {
+        authorization: "Bearer secret",
+        cookie: "a=1; b=2",
+        "x-keep": "original",
+      },
+    });
+
+    await runWithHeadersContext(headersContextFromRequest(request), async () => {
+      applyMiddlewareRequestHeaders(
+        new Headers({
+          "x-middleware-override-headers": "x-keep,x-added",
+          "x-middleware-request-x-keep": "updated",
+          "x-middleware-request-x-added": "1",
+        }),
+      );
+
+      const liveHeaders = await headers();
+      const liveCookies = await cookies();
+
+      expect(liveHeaders.get("authorization")).toBeNull();
+      expect(liveHeaders.get("cookie")).toBeNull();
+      expect(liveHeaders.get("x-keep")).toBe("updated");
+      expect(liveHeaders.get("x-added")).toBe("1");
+      expect(liveCookies.getAll()).toEqual([]);
+    });
   });
 });
 

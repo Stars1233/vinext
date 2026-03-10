@@ -195,6 +195,7 @@ export async function runMiddleware(request, ctx) {
       // from the final client response.
       if (
         !key.startsWith("x-middleware-") ||
+        key === "x-middleware-override-headers" ||
         key.startsWith("x-middleware-request-")
       ) rHeaders.append(key, value);
     }
@@ -216,7 +217,7 @@ export async function runMiddleware(request, ctx) {
   if (rewriteUrl) {
     var rwHeaders = new Headers();
     for (var [k, v] of response.headers) {
-      if (!k.startsWith("x-middleware-") || k.startsWith("x-middleware-request-")) rwHeaders.append(k, v);
+      if (!k.startsWith("x-middleware-") || k === "x-middleware-override-headers" || k.startsWith("x-middleware-request-")) rwHeaders.append(k, v);
     }
     var rewritePath;
     try { var parsed = new URL(rewriteUrl, request.url); rewritePath = parsed.pathname + parsed.search; }

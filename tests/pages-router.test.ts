@@ -428,6 +428,23 @@ describe("Pages Router integration", () => {
     expect(text).toContain("Access Denied");
   });
 
+  it("middleware request header overrides can delete credential headers before page handling", async () => {
+    // Ported from Next.js: test/e2e/middleware-request-header-overrides/test/index.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-request-header-overrides/test/index.test.ts
+    const res = await fetch(`${baseUrl}/header-override-delete`, {
+      headers: {
+        authorization: "Bearer secret",
+        cookie: "a=1; b=2",
+      },
+    });
+
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('id="authorization">null<');
+    expect(html).toContain('id="cookie">null<');
+    expect(html).toContain('id="middleware-header">hello-from-middleware<');
+  });
+
   // --- Hydration ---
 
   it("hydration proxy script is fetchable", async () => {
@@ -1466,6 +1483,21 @@ describe("Production server middleware (Pages Router)", () => {
     const res = await fetch(`${prodUrl}/about`);
     expect(res.status).toBe(200);
     expect(res.headers.get("x-custom-middleware")).toBe("active");
+  });
+
+  it("middleware request header overrides can delete credential headers before page handling", async () => {
+    const res = await fetch(`${prodUrl}/header-override-delete`, {
+      headers: {
+        authorization: "Bearer secret",
+        cookie: "a=1; b=2",
+      },
+    });
+
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('id="authorization">null<');
+    expect(html).toContain('id="cookie">null<');
+    expect(html).toContain('id="middleware-header">hello-from-middleware<');
   });
 
   it("does not run middleware on /api routes", async () => {

@@ -6,6 +6,7 @@
  */
 
 import type { NextRedirect, NextRewrite, NextHeader, HasCondition } from "./next-config.js";
+import { buildRequestHeadersFromMiddlewareResponse } from "../server/middleware-request-headers.js";
 
 /**
  * Cache for compiled regex patterns in matchConfigPattern.
@@ -438,28 +439,19 @@ export function applyMiddlewareRequestHeaders(
   middlewareHeaders: Record<string, string | string[]>,
   request: Request,
 ): { request: Request; postMwReqCtx: RequestContext } {
-  const mwReqPrefix = "x-middleware-request-";
-  const toApply: Record<string, string> = {};
+  const nextHeaders = buildRequestHeadersFromMiddlewareResponse(request.headers, middlewareHeaders);
 
   for (const key of Object.keys(middlewareHeaders)) {
-    if (key.startsWith(mwReqPrefix)) {
-      const realName = key.slice(mwReqPrefix.length);
-      toApply[realName] = middlewareHeaders[key] as string;
-      delete middlewareHeaders[key];
-    } else if (key.startsWith("x-middleware-")) {
+    if (key.startsWith("x-middleware-")) {
       delete middlewareHeaders[key];
     }
   }
 
-  if (Object.keys(toApply).length > 0) {
+  if (nextHeaders) {
     // Headers may be immutable (Workers), so always clone via new Headers().
-    const newHeaders = new Headers(request.headers);
-    for (const [k, v] of Object.entries(toApply)) {
-      newHeaders.set(k, v);
-    }
     request = new Request(request.url, {
       method: request.method,
-      headers: newHeaders,
+      headers: nextHeaders,
       body: request.body,
       // @ts-expect-error — duplex needed for streaming request bodies
       duplex: request.body ? "half" : undefined,

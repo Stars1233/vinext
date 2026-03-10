@@ -258,6 +258,112 @@ describe("next/headers shim", () => {
     expect(ctx.headers.get("cookie")).toBe("a=1; b=2");
   });
 
+  it("cookies().getAll(name) filters by name and matches upstream duplicate semantics", async () => {
+    const { headersContextFromRequest, runWithHeadersContext, cookies } =
+      await import("../packages/vinext/src/shims/headers.js");
+
+    // Ported from the current @edge-runtime/cookies RequestCookies behavior:
+    // duplicate names are collapsed to the last value, and getAll(name) filters.
+    const ctx = headersContextFromRequest(
+      new Request("https://example.com", {
+        headers: { cookie: "a=1; a=2; b=3" },
+      }),
+    );
+
+    await runWithHeadersContext(ctx, async () => {
+      const jar = await cookies();
+      expect(jar.get("a")).toEqual({ name: "a", value: "2" });
+      expect(jar.getAll("a")).toEqual([{ name: "a", value: "2" }]);
+      expect(jar.getAll()).toEqual([
+        { name: "a", value: "2" },
+        { name: "b", value: "3" },
+      ]);
+    });
+  });
+
+  it("cookies().getAll({ name }) supports the RequestCookie overload and missing names", async () => {
+    const { headersContextFromRequest, runWithHeadersContext, cookies } =
+      await import("../packages/vinext/src/shims/headers.js");
+
+    const ctx = headersContextFromRequest(
+      new Request("https://example.com", {
+        headers: { cookie: "a=1; a=2; token=abc%3D123" },
+      }),
+    );
+
+    await runWithHeadersContext(ctx, async () => {
+      const jar = await cookies();
+      expect(jar.getAll({ name: "a" })).toEqual([{ name: "a", value: "2" }]);
+      expect(jar.getAll("missing")).toEqual([]);
+      expect(jar.getAll({ name: "missing" })).toEqual([]);
+      expect(jar.get("token")).toEqual({ name: "token", value: "abc=123" });
+    });
+  });
+
+  it("cookies() ignores malformed cookie values and treats bare tokens as true", async () => {
+    const { headersContextFromRequest, runWithHeadersContext, cookies } =
+      await import("../packages/vinext/src/shims/headers.js");
+
+    const ctx = headersContextFromRequest(
+      new Request("https://example.com", {
+        headers: { cookie: "bad=%E0%A4%A; good=ok; flag" },
+      }),
+    );
+
+    await runWithHeadersContext(ctx, async () => {
+      const jar = await cookies();
+      expect(jar.get("bad")).toBeUndefined();
+      expect(jar.get("good")).toEqual({ name: "good", value: "ok" });
+      expect(jar.get("flag")).toEqual({ name: "flag", value: "true" });
+      expect(jar.getAll()).toEqual([
+        { name: "good", value: "ok" },
+        { name: "flag", value: "true" },
+      ]);
+    });
+  });
+
+  it("cookies() preserves explicit empty values", async () => {
+    const { headersContextFromRequest, runWithHeadersContext, cookies } =
+      await import("../packages/vinext/src/shims/headers.js");
+
+    const ctx = headersContextFromRequest(
+      new Request("https://example.com", {
+        headers: { cookie: "empty=; flag" },
+      }),
+    );
+
+    await runWithHeadersContext(ctx, async () => {
+      const jar = await cookies();
+      expect(jar.get("empty")).toEqual({ name: "empty", value: "" });
+      expect(jar.get("flag")).toEqual({ name: "flag", value: "true" });
+      expect(jar.getAll()).toEqual([
+        { name: "empty", value: "" },
+        { name: "flag", value: "true" },
+      ]);
+    });
+  });
+
+  it("cookies() preserves whitespace exactly like the Next.js parser", async () => {
+    const { headersContextFromRequest, runWithHeadersContext, cookies } =
+      await import("../packages/vinext/src/shims/headers.js");
+
+    const ctx = headersContextFromRequest(
+      new Request("https://example.com", {
+        headers: { cookie: "a= 1 ; a =2" },
+      }),
+    );
+
+    await runWithHeadersContext(ctx, async () => {
+      const jar = await cookies();
+      expect(jar.get("a")).toEqual({ name: "a", value: " 1 " });
+      expect(jar.get("a ")).toEqual({ name: "a ", value: "2" });
+      expect(jar.getAll()).toEqual([
+        { name: "a", value: " 1 " },
+        { name: "a ", value: "2" },
+      ]);
+    });
+  });
+
   it("headersContextFromRequest returns mutable headers (not the immutable Request.headers)", async () => {
     // In Cloudflare Workers, Request.headers is immutable. applyMiddlewareRequestHeaders
     // needs ctx.headers.set() after middleware runs, so the context must hold a mutable
@@ -340,6 +446,66 @@ describe("next/headers shim", () => {
       // Cookies map should be rebuilt with the new values
       expect(ctx.cookies.get("a")).toBe("2");
       expect(ctx.cookies.get("b")).toBe("3");
+    });
+  });
+
+  it("cookies().getAll(name) reflects middleware cookie rewrites with duplicate names", async () => {
+    const {
+      headersContextFromRequest,
+      applyMiddlewareRequestHeaders,
+      runWithHeadersContext,
+      cookies,
+    } = await import("../packages/vinext/src/shims/headers.js");
+    const req = new Request("https://example.com", {
+      headers: { cookie: "a=1; b=2" },
+    });
+    const ctx = headersContextFromRequest(req);
+
+    await runWithHeadersContext(ctx, async () => {
+      applyMiddlewareRequestHeaders(
+        new Headers({
+          "x-middleware-request-cookie": "a=1; a=2; b=4",
+        }),
+      );
+
+      const jar = await cookies();
+      expect(jar.get("a")).toEqual({ name: "a", value: "2" });
+      expect(jar.getAll("a")).toEqual([{ name: "a", value: "2" }]);
+      expect(jar.getAll({ name: "a" })).toEqual([{ name: "a", value: "2" }]);
+      expect(jar.getAll()).toEqual([
+        { name: "a", value: "2" },
+        { name: "b", value: "4" },
+      ]);
+    });
+  });
+
+  it("cookies() preserves explicit empty values after middleware cookie rewrites", async () => {
+    const {
+      headersContextFromRequest,
+      applyMiddlewareRequestHeaders,
+      runWithHeadersContext,
+      cookies,
+    } = await import("../packages/vinext/src/shims/headers.js");
+    const ctx = headersContextFromRequest(
+      new Request("https://example.com", {
+        headers: { cookie: "start=1" },
+      }),
+    );
+
+    await runWithHeadersContext(ctx, async () => {
+      applyMiddlewareRequestHeaders(
+        new Headers({
+          "x-middleware-request-cookie": "empty=; flag",
+        }),
+      );
+
+      const jar = await cookies();
+      expect(jar.get("empty")).toEqual({ name: "empty", value: "" });
+      expect(jar.get("flag")).toEqual({ name: "flag", value: "true" });
+      expect(jar.getAll()).toEqual([
+        { name: "empty", value: "" },
+        { name: "flag", value: "true" },
+      ]);
     });
   });
 
@@ -2582,6 +2748,71 @@ describe("RequestCookies API", () => {
     expect(all).toContainEqual({ name: "a", value: "1" });
     expect(all).toContainEqual({ name: "b", value: "2" });
     expect(all).toContainEqual({ name: "c", value: "3" });
+  });
+
+  it("getAll(name) filters by cookie name", async () => {
+    const { RequestCookies } = await import("../packages/vinext/src/shims/server.js");
+    const headers = new Headers({ cookie: "a=1; a=2; b=3" });
+    const cookies = new RequestCookies(headers);
+
+    expect(cookies.get("a")).toEqual({ name: "a", value: "2" });
+    expect(cookies.getAll("a")).toEqual([{ name: "a", value: "2" }]);
+    expect(cookies.getAll()).toEqual([
+      { name: "a", value: "2" },
+      { name: "b", value: "3" },
+    ]);
+  });
+
+  it("getAll({ name }) filters by cookie name and missing names return []", async () => {
+    const { RequestCookies } = await import("../packages/vinext/src/shims/server.js");
+    const headers = new Headers({ cookie: "a=1; a=2; token=abc=def" });
+    const cookies = new RequestCookies(headers);
+
+    expect(cookies.getAll({ name: "a", value: "ignored" })).toEqual([{ name: "a", value: "2" }]);
+    expect(cookies.getAll("missing")).toEqual([]);
+    expect(cookies.getAll({ name: "missing", value: "" })).toEqual([]);
+    expect(cookies.get("token")).toEqual({ name: "token", value: "abc=def" });
+  });
+
+  it("parses encoded values, skips malformed values, and supports bare tokens", async () => {
+    const { RequestCookies } = await import("../packages/vinext/src/shims/server.js");
+    const headers = new Headers({ cookie: "token=abc%3D123; bad=%E0%A4%A; flag; ok=yes" });
+    const cookies = new RequestCookies(headers);
+
+    expect(cookies.get("token")).toEqual({ name: "token", value: "abc=123" });
+    expect(cookies.get("bad")).toBeUndefined();
+    expect(cookies.get("flag")).toEqual({ name: "flag", value: "true" });
+    expect(cookies.getAll()).toEqual([
+      { name: "token", value: "abc=123" },
+      { name: "flag", value: "true" },
+      { name: "ok", value: "yes" },
+    ]);
+  });
+
+  it("preserves explicit empty values", async () => {
+    const { RequestCookies } = await import("../packages/vinext/src/shims/server.js");
+    const headers = new Headers({ cookie: "empty=; flag" });
+    const cookies = new RequestCookies(headers);
+
+    expect(cookies.get("empty")).toEqual({ name: "empty", value: "" });
+    expect(cookies.get("flag")).toEqual({ name: "flag", value: "true" });
+    expect(cookies.getAll()).toEqual([
+      { name: "empty", value: "" },
+      { name: "flag", value: "true" },
+    ]);
+  });
+
+  it("preserves whitespace exactly like the Next.js parser", async () => {
+    const { RequestCookies } = await import("../packages/vinext/src/shims/server.js");
+    const headers = new Headers({ cookie: "a= 1 ; a =2" });
+    const cookies = new RequestCookies(headers);
+
+    expect(cookies.get("a")).toEqual({ name: "a", value: " 1 " });
+    expect(cookies.get("a ")).toEqual({ name: "a ", value: "2" });
+    expect(cookies.getAll()).toEqual([
+      { name: "a", value: " 1 " },
+      { name: "a ", value: "2" },
+    ]);
   });
 
   it("has() checks cookie existence", async () => {

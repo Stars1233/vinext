@@ -150,6 +150,8 @@ describe("extractGetStaticPropsRevalidate", () => {
     expect(extractGetStaticPropsRevalidate(code)).toBe(60);
   });
 
+  // These bare return-object cases intentionally exercise the whole-file
+  // fallback path used when no local getStaticProps declaration is present.
   it("extracts revalidate: 0 (treat as SSR)", () => {
     const code = `return { props: {}, revalidate: 0 };`;
     expect(extractGetStaticPropsRevalidate(code)).toBe(0);
@@ -169,6 +171,149 @@ describe("extractGetStaticPropsRevalidate", () => {
     const code = `export async function getStaticProps() {
   return { props: { foo: 1 } };
 }`;
+    expect(extractGetStaticPropsRevalidate(code)).toBeNull();
+  });
+
+  it("ignores unrelated revalidate values outside getStaticProps", () => {
+    const code = `const defaults = { revalidate: 30 };
+
+export async function getStaticProps() {
+  return { props: { ok: true } };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBeNull();
+  });
+
+  it("prefers revalidate inside getStaticProps over unrelated values elsewhere", () => {
+    const code = `const defaults = { revalidate: 30 };
+
+export async function getStaticProps() {
+  return { props: {}, revalidate: 60 };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBe(60);
+  });
+
+  it("finds revalidate in a later return when an earlier return redirects", () => {
+    const code = `export async function getStaticProps(ctx) {
+  if (!ctx.params?.slug) {
+    return { redirect: { destination: "/", permanent: false } };
+  }
+  return { props: { data: 1 }, revalidate: 60 };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBe(60);
+  });
+
+  it("ignores revalidate in a function defined after getStaticProps", () => {
+    const code = `export function getStaticProps() {
+  return { props: {} };
+}
+
+export function unrelated() {
+  return { revalidate: 999 };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBeNull();
+  });
+
+  it("extracts revalidate from a function declaration with destructured params", () => {
+    const code = `export async function getStaticProps({ params }) {
+  return { props: { slug: params?.slug ?? null }, revalidate: 60 };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBe(60);
+  });
+
+  it("extracts revalidate from a function expression with destructured params", () => {
+    const code = `export const getStaticProps = async function({ params }) {
+  return { props: { slug: params?.slug ?? null }, revalidate: 60 };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBe(60);
+  });
+
+  it("ignores revalidate in a nested helper function inside getStaticProps", () => {
+    const code = `export function getStaticProps() {
+  const helper = () => {
+    return { revalidate: 999 };
+  };
+
+  return { props: {} };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBeNull();
+  });
+
+  it("ignores revalidate in a nested named function inside getStaticProps", () => {
+    const code = `export function getStaticProps() {
+  function helper(paramOne, paramTwo, paramThree, paramFour, paramFive) {
+    return { revalidate: 999 };
+  }
+
+  return { props: {} };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBeNull();
+  });
+
+  it("ignores revalidate in a nested implicit-arrow helper inside block-body getStaticProps", () => {
+    const code = `export const getStaticProps = async () => {
+  const helper = () => ({ revalidate: 999 });
+
+  return { props: {} };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBeNull();
+  });
+
+  it("ignores revalidate in a nested implicit-arrow helper inside function-expression getStaticProps", () => {
+    const code = `export const getStaticProps = async function() {
+  const helper = () => ({ revalidate: 999 });
+
+  return { props: {} };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBeNull();
+  });
+
+  it("ignores revalidate nested inside props data", () => {
+    const code = `export async function getStaticProps() {
+  return {
+    props: {
+      config: {
+        revalidate: 999,
+      },
+    },
+  };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBeNull();
+  });
+
+  it("ignores revalidate in an object-method helper inside getStaticProps", () => {
+    const code = `export function getStaticProps() {
+  const helper = {
+    build() {
+      return { revalidate: 999 };
+    },
+  };
+
+  return { props: {} };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBeNull();
+  });
+
+  it("ignores revalidate in object-method helpers named get and async", () => {
+    const code = `export function getStaticProps() {
+  const helper = {
+    get() {
+      return { revalidate: 999 };
+    },
+    async() {
+      return { revalidate: 998 };
+    },
+  };
+
+  return { props: {} };
+}`;
+    expect(extractGetStaticPropsRevalidate(code)).toBeNull();
+  });
+
+  it("ignores unrelated revalidate when getStaticProps is re-exported from another file", () => {
+    const code = `const defaults = { revalidate: 30 };
+
+export { getStaticProps } from "./shared";
+`;
     expect(extractGetStaticPropsRevalidate(code)).toBeNull();
   });
 

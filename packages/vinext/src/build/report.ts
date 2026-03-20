@@ -110,17 +110,501 @@ export function extractExportConstNumber(code: string, name: string): number | n
  *   null     — no `revalidate` key found (fully static)
  */
 export function extractGetStaticPropsRevalidate(code: string): number | false | null {
-  // TODO: This regex matches `revalidate:` anywhere in the file, not scoped to
-  // the getStaticProps return object. A config object or comment elsewhere in
-  // the file (e.g. `const defaults = { revalidate: 30 }`) could produce a false
-  // positive. Rare in practice, but a proper AST-based approach would be more
-  // accurate.
-  const re = /\brevalidate\s*:\s*(-?\d+(?:\.\d+)?|Infinity|false)\b/;
-  const m = re.exec(code);
+  const returnObjects = extractGetStaticPropsReturnObjects(code);
+
+  if (returnObjects) {
+    for (const searchSpace of returnObjects) {
+      const revalidate = extractTopLevelRevalidateValue(searchSpace);
+      if (revalidate !== null) return revalidate;
+    }
+    return null;
+  }
+
+  const m = /\brevalidate\s*:\s*(-?\d+(?:\.\d+)?|Infinity|false)\b/.exec(code);
   if (!m) return null;
   if (m[1] === "false") return false;
   if (m[1] === "Infinity") return Infinity;
   return parseFloat(m[1]);
+}
+
+function extractTopLevelRevalidateValue(code: string): number | false | null {
+  let braceDepth = 0;
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let quote: '"' | "'" | "`" | null = null;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  for (let i = 0; i < code.length; i++) {
+    const char = code[i];
+    const next = code[i + 1];
+
+    if (inLineComment) {
+      if (char === "\n") inLineComment = false;
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (char === "*" && next === "/") {
+        inBlockComment = false;
+        i++;
+      }
+      continue;
+    }
+
+    if (quote) {
+      if (char === "\\") {
+        i++;
+        continue;
+      }
+      if (char === quote) quote = null;
+      continue;
+    }
+
+    if (char === "/" && next === "/") {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+
+    if (char === "/" && next === "*") {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+
+    if (char === "{") {
+      braceDepth++;
+      continue;
+    }
+
+    if (char === "}") {
+      braceDepth--;
+      continue;
+    }
+
+    if (char === "(") {
+      parenDepth++;
+      continue;
+    }
+
+    if (char === ")") {
+      parenDepth--;
+      continue;
+    }
+
+    if (char === "[") {
+      bracketDepth++;
+      continue;
+    }
+
+    if (char === "]") {
+      bracketDepth--;
+      continue;
+    }
+
+    if (
+      braceDepth === 1 &&
+      parenDepth === 0 &&
+      bracketDepth === 0 &&
+      matchesKeywordAt(code, i, "revalidate")
+    ) {
+      const colonIndex = findNextNonWhitespaceIndex(code, i + "revalidate".length);
+      if (colonIndex === -1 || code[colonIndex] !== ":") continue;
+
+      const valueStart = findNextNonWhitespaceIndex(code, colonIndex + 1);
+      if (valueStart === -1) return null;
+
+      const valueMatch = /^(-?\d+(?:\.\d+)?|Infinity|false)\b/.exec(code.slice(valueStart));
+      if (!valueMatch) return null;
+      if (valueMatch[1] === "false") return false;
+      if (valueMatch[1] === "Infinity") return Infinity;
+      return parseFloat(valueMatch[1]);
+    }
+  }
+
+  return null;
+}
+
+function extractGetStaticPropsReturnObjects(code: string): string[] | null {
+  const declarationMatch =
+    /(?:^|\n)\s*(?:export\s+)?(?:async\s+)?function\s+getStaticProps\b|(?:^|\n)\s*(?:export\s+)?(?:const|let|var)\s+getStaticProps\b/.exec(
+      code,
+    );
+  if (!declarationMatch) {
+    // A file can re-export getStaticProps from another module without defining
+    // it locally. In that case we can't safely infer revalidate from this file,
+    // so skip the whole-file fallback to avoid unrelated false positives.
+    if (/(?:^|\n)\s*export\s*\{[^}]*\bgetStaticProps\b[^}]*\}\s*from\b/.test(code)) {
+      return [];
+    }
+    return null;
+  }
+
+  const declaration = extractGetStaticPropsDeclaration(code, declarationMatch);
+  if (declaration === null) return [];
+
+  const returnObjects = declaration.trimStart().startsWith("{")
+    ? collectReturnObjectsFromFunctionBody(declaration)
+    : [];
+
+  if (returnObjects.length > 0) return returnObjects;
+
+  const arrowMatch = declaration.search(/=>\s*\(\s*\{/);
+  // getStaticProps was found but contains no return objects — return empty
+  // (non-null signals the caller to skip the whole-file fallback).
+  if (arrowMatch === -1) return [];
+
+  const braceStart = declaration.indexOf("{", arrowMatch);
+  if (braceStart === -1) return [];
+
+  const braceEnd = findMatchingBrace(declaration, braceStart);
+  if (braceEnd === -1) return [];
+
+  return [declaration.slice(braceStart, braceEnd + 1)];
+}
+
+function extractGetStaticPropsDeclaration(
+  code: string,
+  declarationMatch: RegExpExecArray,
+): string | null {
+  const declarationStart = declarationMatch.index;
+  const declarationText = declarationMatch[0];
+  const declarationTail = code.slice(declarationStart);
+
+  if (declarationText.includes("function getStaticProps")) {
+    return extractFunctionBody(code, declarationStart + declarationText.length);
+  }
+
+  const functionExpressionMatch = /(?:async\s+)?function\b/.exec(declarationTail);
+  if (functionExpressionMatch) {
+    return extractFunctionBody(declarationTail, functionExpressionMatch.index);
+  }
+
+  const blockBodyMatch = /=>\s*\{/.exec(declarationTail);
+  if (blockBodyMatch) {
+    const braceStart = declarationTail.indexOf("{", blockBodyMatch.index);
+    if (braceStart === -1) return null;
+
+    const braceEnd = findMatchingBrace(declarationTail, braceStart);
+    if (braceEnd === -1) return null;
+
+    return declarationTail.slice(braceStart, braceEnd + 1);
+  }
+
+  const implicitArrowMatch = declarationTail.search(/=>\s*\(\s*\{/);
+  if (implicitArrowMatch === -1) return null;
+
+  const implicitBraceStart = declarationTail.indexOf("{", implicitArrowMatch);
+  if (implicitBraceStart === -1) return null;
+
+  const implicitBraceEnd = findMatchingBrace(declarationTail, implicitBraceStart);
+  if (implicitBraceEnd === -1) return null;
+
+  return declarationTail.slice(0, implicitBraceEnd + 1);
+}
+
+function extractFunctionBody(code: string, functionStart: number): string | null {
+  const bodyEnd = findFunctionBodyEnd(code, functionStart);
+  if (bodyEnd === -1) return null;
+
+  const paramsStart = code.indexOf("(", functionStart);
+  if (paramsStart === -1) return null;
+
+  const paramsEnd = findMatchingParen(code, paramsStart);
+  if (paramsEnd === -1) return null;
+
+  const bodyStart = code.indexOf("{", paramsEnd + 1);
+  if (bodyStart === -1) return null;
+
+  return code.slice(bodyStart, bodyEnd + 1);
+}
+
+function collectReturnObjectsFromFunctionBody(code: string): string[] {
+  const returnObjects: string[] = [];
+  let quote: '"' | "'" | "`" | null = null;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  for (let i = 0; i < code.length; i++) {
+    const char = code[i];
+    const next = code[i + 1];
+
+    if (inLineComment) {
+      if (char === "\n") inLineComment = false;
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (char === "*" && next === "/") {
+        inBlockComment = false;
+        i++;
+      }
+      continue;
+    }
+
+    if (quote) {
+      if (char === "\\") {
+        i++;
+        continue;
+      }
+      if (char === quote) quote = null;
+      continue;
+    }
+
+    if (char === "/" && next === "/") {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+
+    if (char === "/" && next === "*") {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+
+    if (matchesKeywordAt(code, i, "function")) {
+      const nestedBodyEnd = findFunctionBodyEnd(code, i);
+      if (nestedBodyEnd !== -1) {
+        i = nestedBodyEnd;
+      }
+      continue;
+    }
+
+    if (matchesKeywordAt(code, i, "class")) {
+      const classBodyEnd = findClassBodyEnd(code, i);
+      if (classBodyEnd !== -1) {
+        i = classBodyEnd;
+      }
+      continue;
+    }
+
+    if (char === "=" && next === ">") {
+      const nestedBodyEnd = findArrowFunctionBodyEnd(code, i);
+      if (nestedBodyEnd !== -1) {
+        i = nestedBodyEnd;
+      }
+      continue;
+    }
+
+    if (
+      (char >= "A" && char <= "Z") ||
+      (char >= "a" && char <= "z") ||
+      char === "_" ||
+      char === "$" ||
+      char === "*"
+    ) {
+      const methodBodyEnd = findObjectMethodBodyEnd(code, i);
+      if (methodBodyEnd !== -1) {
+        i = methodBodyEnd;
+        continue;
+      }
+    }
+
+    if (matchesKeywordAt(code, i, "return")) {
+      const braceStart = findNextNonWhitespaceIndex(code, i + "return".length);
+      if (braceStart === -1 || code[braceStart] !== "{") continue;
+
+      const braceEnd = findMatchingBrace(code, braceStart);
+      if (braceEnd === -1) continue;
+
+      returnObjects.push(code.slice(braceStart, braceEnd + 1));
+      i = braceEnd;
+    }
+  }
+
+  return returnObjects;
+}
+
+function findFunctionBodyEnd(code: string, functionStart: number): number {
+  const paramsStart = code.indexOf("(", functionStart);
+  if (paramsStart === -1) return -1;
+
+  const paramsEnd = findMatchingParen(code, paramsStart);
+  if (paramsEnd === -1) return -1;
+
+  const bodyStart = code.indexOf("{", paramsEnd + 1);
+  if (bodyStart === -1) return -1;
+
+  return findMatchingBrace(code, bodyStart);
+}
+
+function findClassBodyEnd(code: string, classStart: number): number {
+  const bodyStart = code.indexOf("{", classStart + "class".length);
+  if (bodyStart === -1) return -1;
+
+  return findMatchingBrace(code, bodyStart);
+}
+
+function findArrowFunctionBodyEnd(code: string, arrowIndex: number): number {
+  const bodyStart = findNextNonWhitespaceIndex(code, arrowIndex + 2);
+  if (bodyStart === -1 || code[bodyStart] !== "{") return -1;
+
+  return findMatchingBrace(code, bodyStart);
+}
+
+function findObjectMethodBodyEnd(code: string, start: number): number {
+  let i = start;
+
+  if (matchesKeywordAt(code, i, "async")) {
+    const afterAsync = findNextNonWhitespaceIndex(code, i + "async".length);
+    if (afterAsync === -1) return -1;
+    if (code[afterAsync] !== "(") {
+      i = afterAsync;
+    }
+  }
+
+  if (code[i] === "*") {
+    i = findNextNonWhitespaceIndex(code, i + 1);
+    if (i === -1) return -1;
+  }
+
+  if (!/[A-Za-z_$]/.test(code[i] ?? "")) return -1;
+
+  const nameStart = i;
+  while (/[A-Za-z0-9_$]/.test(code[i] ?? "")) i++;
+  const name = code.slice(nameStart, i);
+
+  if (
+    name === "if" ||
+    name === "for" ||
+    name === "while" ||
+    name === "switch" ||
+    name === "catch" ||
+    name === "function" ||
+    name === "return" ||
+    name === "const" ||
+    name === "let" ||
+    name === "var" ||
+    name === "new"
+  ) {
+    return -1;
+  }
+
+  if (name === "get" || name === "set") {
+    const afterAccessor = findNextNonWhitespaceIndex(code, i);
+    if (afterAccessor === -1) return -1;
+    if (code[afterAccessor] !== "(") {
+      i = afterAccessor;
+      if (!/[A-Za-z_$]/.test(code[i] ?? "")) return -1;
+      while (/[A-Za-z0-9_$]/.test(code[i] ?? "")) i++;
+    }
+  }
+
+  const paramsStart = findNextNonWhitespaceIndex(code, i);
+  if (paramsStart === -1 || code[paramsStart] !== "(") return -1;
+
+  const paramsEnd = findMatchingParen(code, paramsStart);
+  if (paramsEnd === -1) return -1;
+
+  const bodyStart = findNextNonWhitespaceIndex(code, paramsEnd + 1);
+  if (bodyStart === -1 || code[bodyStart] !== "{") return -1;
+
+  return findMatchingBrace(code, bodyStart);
+}
+
+function findNextNonWhitespaceIndex(code: string, start: number): number {
+  for (let i = start; i < code.length; i++) {
+    if (!/\s/.test(code[i])) return i;
+  }
+  return -1;
+}
+
+function matchesKeywordAt(code: string, index: number, keyword: string): boolean {
+  const before = index === 0 ? "" : code[index - 1];
+  const after = code[index + keyword.length] ?? "";
+  return (
+    code.startsWith(keyword, index) &&
+    (before === "" || !/[A-Za-z0-9_$]/.test(before)) &&
+    (after === "" || !/[A-Za-z0-9_$]/.test(after))
+  );
+}
+
+function findMatchingBrace(code: string, start: number): number {
+  return findMatchingToken(code, start, "{", "}");
+}
+
+function findMatchingParen(code: string, start: number): number {
+  return findMatchingToken(code, start, "(", ")");
+}
+
+function findMatchingToken(
+  code: string,
+  start: number,
+  openToken: string,
+  closeToken: string,
+): number {
+  let depth = 0;
+  let quote: '"' | "'" | "`" | null = null;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  for (let i = start; i < code.length; i++) {
+    const char = code[i];
+    const next = code[i + 1];
+
+    if (inLineComment) {
+      if (char === "\n") inLineComment = false;
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (char === "*" && next === "/") {
+        inBlockComment = false;
+        i++;
+      }
+      continue;
+    }
+
+    if (quote) {
+      if (char === "\\") {
+        i++;
+        continue;
+      }
+      if (char === quote) quote = null;
+      continue;
+    }
+
+    if (char === "/" && next === "/") {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+
+    if (char === "/" && next === "*") {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+
+    if (char === openToken) {
+      depth++;
+      continue;
+    }
+
+    if (char === closeToken) {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+
+  return -1;
 }
 
 // ─── Route classification ─────────────────────────────────────────────────────

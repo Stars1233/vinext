@@ -9,6 +9,7 @@ import {
 import { generateServerEntry as _generateServerEntry } from "./entries/pages-server-entry.js";
 import { generateClientEntry as _generateClientEntry } from "./entries/pages-client-entry.js";
 import { appRouter, invalidateAppRouteCache } from "./routing/app-router.js";
+import type { NitroRouteRuleConfig } from "./build/nitro-route-rules.js";
 import { createValidFileMatcher } from "./routing/file-matcher.js";
 import { createSSRHandler } from "./server/dev-server.js";
 import { handleApiRoute } from "./server/api-handler.js";
@@ -903,6 +904,16 @@ export interface VinextOptions {
      * @default false
      */
     clientReferenceDedup?: boolean;
+  };
+}
+
+interface NitroSetupContext {
+  options: {
+    dev?: boolean;
+    routeRules?: Record<string, NitroRouteRuleConfig>;
+  };
+  logger?: {
+    warn?: (message: string) => void;
   };
 }
 
@@ -3297,6 +3308,40 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         },
       };
     })(),
+    {
+      name: "vinext:nitro-route-rules",
+      nitro: {
+        setup: async (nitro: NitroSetupContext) => {
+          if (nitro.options.dev) return;
+          if (!nextConfig) return;
+          if (!hasAppDir && !hasPagesDir) return;
+
+          const { collectNitroRouteRules, mergeNitroRouteRules } =
+            await import("./build/nitro-route-rules.js");
+          const generatedRouteRules = await collectNitroRouteRules({
+            appDir: hasAppDir ? appDir : null,
+            pagesDir: hasPagesDir ? pagesDir : null,
+            pageExtensions: nextConfig.pageExtensions,
+          });
+
+          if (Object.keys(generatedRouteRules).length === 0) return;
+
+          const { routeRules, skippedRoutes } = mergeNitroRouteRules(
+            nitro.options.routeRules,
+            generatedRouteRules,
+          );
+
+          nitro.options.routeRules = routeRules;
+
+          if (skippedRoutes.length > 0) {
+            const warn = nitro.logger?.warn ?? console.warn;
+            warn(
+              `[vinext] Skipping generated Nitro routeRules for routes with existing exact cache config: ${skippedRoutes.join(", ")}`,
+            );
+          }
+        },
+      },
+    } as Plugin & { nitro: { setup: (nitro: NitroSetupContext) => Promise<void> } }, // Nitro plugin extension convention: https://nitro.build/guide/plugins
     // Vite can emit empty SSR manifest entries for modules that Rollup inlines
     // into another chunk. Pages Router looks up assets by page module path at
     // runtime, so rebuild those mappings from the emitted client bundle.

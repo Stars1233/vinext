@@ -40,6 +40,7 @@ import {
   runInstrumentation,
 } from "./server/instrumentation.js";
 import { PHASE_PRODUCTION_BUILD, PHASE_DEVELOPMENT_SERVER } from "./shims/constants.js";
+import { precompressAssets } from "./build/precompress.js";
 import { validateDevRequest } from "./server/dev-origin-check.js";
 import {
   isExternalUrl,
@@ -817,6 +818,22 @@ export type VinextOptions = {
    * @default true
    */
   react?: VitePluginReactOptions | boolean;
+  /**
+   * Enable build-time precompression of static assets (.br, .gz, .zst).
+   *
+   * When enabled, hashed assets in the client build are precompressed at
+   * build time so the production server can serve them without on-the-fly
+   * compression overhead.
+   *
+   * Disabled by default. Not useful when deploying to edge platforms
+   * (Cloudflare Workers, Nitro) that handle compression at the CDN layer.
+   *
+   * Can also be enabled via the `--precompress` CLI flag or by setting the
+   * `VINEXT_PRECOMPRESS=1` environment variable (useful for CI pipelines
+   * that need to enable precompression without modifying vite.config.ts).
+   * @default false
+   */
+  precompress?: boolean;
   /**
    * Experimental vinext-only feature flags.
    */
@@ -3362,6 +3379,95 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         },
       },
     },
+    // Build-time precompression: generate .br, .gz, .zst for hashed assets.
+    // Runs after the client bundle is written so compressed variants are
+    // available for the production server's static file cache.
+    // Opt-in via `precompress: true` in plugin options or `--precompress`
+    // CLI flag. Not useful for edge platforms (Cloudflare Workers, Nitro)
+    // that handle compression at the CDN layer.
+    (() => {
+      let pendingPrecompress: Promise<void> | null = null;
+      let pendingPrecompressError: unknown = null;
+
+      return {
+        name: "vinext:precompress",
+        apply: "build" as const,
+        enforce: "post" as const,
+        writeBundle: {
+          sequential: true,
+          order: "post" as const,
+          handler(outputOptions: { dir?: string }) {
+            if (this.environment?.name !== "client") return;
+
+            if (!options.precompress && process.env.VINEXT_PRECOMPRESS !== "1") return;
+
+            const outDir = outputOptions.dir;
+            if (!outDir) return;
+
+            // Only precompress hashed assets — public directory files use
+            // on-the-fly compression since they may change between deploys.
+            const assetsDir = path.join(outDir, "assets");
+            if (!fs.existsSync(assetsDir)) return;
+
+            const isTTY = process.stderr.isTTY;
+            let lastLineLen = 0;
+
+            // Start precompression as soon as the client bundle is written, but
+            // defer awaiting it until the SSR environment finishes. This overlaps
+            // the extra asset work with the final build phase instead of putting
+            // the full precompression cost on the critical path of step 4/5.
+            pendingPrecompressError = null;
+            pendingPrecompress = (async () => {
+              const result = await precompressAssets(outDir, (completed, total, file) => {
+                if (!isTTY) return;
+                const pct = total > 0 ? Math.floor((completed / total) * 100) : 0;
+                const bar = `[${"█".repeat(Math.floor(pct / 5))}${" ".repeat(20 - Math.floor(pct / 5))}]`;
+                const maxFile = 30;
+                const fileLabel = file.length > maxFile ? "…" + file.slice(-(maxFile - 1)) : file;
+                const line = `Compressing assets... ${bar} ${String(completed).padStart(String(total).length)}/${total} ${fileLabel}`;
+                const padded = line.padEnd(lastLineLen);
+                lastLineLen = line.length;
+                process.stderr.write(`\r${padded}`);
+              });
+              if (isTTY) {
+                process.stderr.write(`\r${" ".repeat(lastLineLen)}\r`);
+              }
+              if (result.filesCompressed > 0) {
+                const ratio = (
+                  (1 - result.totalBrotliBytes / result.totalOriginalBytes) *
+                  100
+                ).toFixed(1);
+                console.log(
+                  `  Precompressed ${result.filesCompressed} assets (${ratio}% smaller with brotli)`,
+                );
+              }
+            })().catch((error) => {
+              pendingPrecompressError = error;
+              // Log immediately so the error isn't invisible if closeBundle
+              // never fires (e.g. a crash in a later SSR build plugin).
+              console.error("[vinext] Precompression failed:", error);
+            });
+          },
+        },
+        closeBundle: {
+          sequential: true,
+          order: "post" as const,
+          async handler() {
+            if (this.environment?.name !== "ssr") return;
+            if (!pendingPrecompress) return;
+
+            const task = pendingPrecompress;
+            pendingPrecompress = null;
+            await task;
+            if (pendingPrecompressError) {
+              const error = pendingPrecompressError;
+              pendingPrecompressError = null;
+              throw error;
+            }
+          },
+        },
+      };
+    })(),
     // Cloudflare Workers production build integration:
     // After all environments are built, compute lazy chunks from the client
     // build manifest and inject globals into the worker entry.

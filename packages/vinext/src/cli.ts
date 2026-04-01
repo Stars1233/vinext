@@ -101,6 +101,7 @@ type ParsedArgs = {
   turbopack?: boolean; // accepted for compat, always ignored
   experimental?: boolean; // accepted for compat, always ignored
   prerenderAll?: boolean;
+  precompress?: boolean;
 };
 
 function parseArgs(args: string[]): ParsedArgs {
@@ -117,6 +118,9 @@ function parseArgs(args: string[]): ParsedArgs {
       result.experimental = true; // no-op
     } else if (arg === "--prerender-all") {
       result.prerenderAll = true;
+    } else if (arg === "--precompress") {
+      result.precompress = true;
+      process.env.VINEXT_PRECOMPRESS = "1";
     } else if (arg === "--port" || arg === "-p") {
       result.port = parseInt(args[++i], 10);
     } else if (arg.startsWith("--port=")) {
@@ -509,6 +513,9 @@ async function buildApp() {
     prerenderResult = await runPrerender({ root: process.cwd() });
   }
 
+  // Precompression runs as a Vite plugin writeBundle hook (vinext:precompress).
+  // Opt-in via --precompress CLI flag or `precompress: true` in plugin options.
+
   process.stdout.write("\x1b[0m");
   await printBuildReport({
     root: process.cwd(),
@@ -678,6 +685,7 @@ function printHelp(cmd?: string) {
     --verbose            Show full Vite/Rollup build output (suppressed by default)
     --prerender-all      Pre-render discovered routes after building (future releases
                          will serve these files in vinext start)
+    --precompress        Precompress static assets at build time (.br, .gz, .zst)
     -h, --help           Show this help
 `);
     return;

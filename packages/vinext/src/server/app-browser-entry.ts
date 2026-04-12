@@ -26,12 +26,12 @@ import {
   commitClientNavigationState,
   consumePrefetchResponse,
   createClientNavigationRenderSnapshot,
+  getCurrentNextUrl,
   getCurrentInterceptionContext,
   getClientNavigationRenderContext,
   getPrefetchCache,
   getPrefetchedUrls,
   pushHistoryStateWithoutNotify,
-  readHistoryStateInterceptionContext,
   replaceClientParamsWithoutNotify,
   replaceHistoryStateWithoutNotify,
   restoreRscResponse,
@@ -40,7 +40,6 @@ import {
   setMountedSlotsHeader,
   setNavigationContext,
   toRscUrl,
-  VINEXT_INTERCEPTION_CONTEXT_HISTORY_STATE_KEY,
   type CachedRscResponse,
   type ClientNavigationRenderSnapshot,
 } from "../shims/navigation.js";
@@ -60,8 +59,11 @@ import {
   type AppWireElements,
 } from "./app-elements.js";
 import {
+  createHistoryStateWithPreviousNextUrl,
   createPendingNavigationCommit,
+  readHistoryStatePreviousNextUrl,
   resolveAndClassifyNavigationCommit,
+  resolveInterceptionContextFromPreviousNextUrl,
   resolvePendingNavigationCommitDisposition,
   routerReducer,
   type AppRouterAction,
@@ -98,9 +100,6 @@ type VisitedResponseCacheEntry = {
 const MAX_VISITED_RESPONSE_CACHE_SIZE = 50;
 const VISITED_RESPONSE_CACHE_TTL = 5 * 60_000;
 const MAX_TRAVERSAL_CACHE_TTL = 30 * 60_000;
-type HistoryStateRecord = {
-  [key: string]: unknown;
-};
 
 // These are plain module-level variables, unlike ClientNavigationState in
 // navigation.ts which uses Symbol.for to survive multiple Vite module instances.
@@ -152,8 +151,7 @@ function stageClientParams(params: Record<string, string | string[]>): void {
   // read latestClientParams, so a
   // server action fired during this window would get the pending (not yet
   // committed) params. This is acceptable because the commit effect fires
-  // synchronously in the same React commit phase, keeping the window
-  // vanishingly small.
+  // before hooks observe the new URL state, keeping the window vanishingly small.
   latestClientParams = params;
   replaceClientParamsWithoutNotify(params);
 }
@@ -209,15 +207,15 @@ function createNavigationCommitEffect(
   href: string,
   historyUpdateMode: HistoryUpdateMode | undefined,
   params: Record<string, string | string[]>,
-  interceptionContext: string | null,
+  previousNextUrl: string | null,
 ): () => void {
   return () => {
     const targetHref = new URL(href, window.location.origin).href;
     stageClientParams(params);
     const preserveExistingState = historyUpdateMode === "replace";
-    const historyState = createHistoryStateWithInterceptionContext(
+    const historyState = createHistoryStateWithPreviousNextUrl(
       preserveExistingState ? window.history.state : null,
-      interceptionContext,
+      previousNextUrl,
     );
 
     if (historyUpdateMode === "replace" && window.location.href !== targetHref) {
@@ -301,41 +299,51 @@ function storeVisitedResponseSnapshot(
   });
 }
 
-function cloneHistoryState(state: unknown): HistoryStateRecord {
-  if (!state || typeof state !== "object") {
-    return {};
+type NavigationRequestState = {
+  interceptionContext: string | null;
+  previousNextUrl: string | null;
+};
+
+function getRequestState(
+  navigationKind: NavigationKind,
+  previousNextUrlOverride?: string | null,
+): NavigationRequestState {
+  if (previousNextUrlOverride !== undefined) {
+    return {
+      interceptionContext: resolveInterceptionContextFromPreviousNextUrl(
+        previousNextUrlOverride,
+        __basePath,
+      ),
+      previousNextUrl: previousNextUrlOverride,
+    };
   }
 
-  const nextState: HistoryStateRecord = {};
-  for (const [key, value] of Object.entries(state)) {
-    nextState[key] = value;
-  }
-  return nextState;
-}
-
-function createHistoryStateWithInterceptionContext(
-  state: unknown,
-  interceptionContext: string | null,
-): HistoryStateRecord | null {
-  const nextState = cloneHistoryState(state);
-
-  if (interceptionContext === null) {
-    delete nextState[VINEXT_INTERCEPTION_CONTEXT_HISTORY_STATE_KEY];
-  } else {
-    nextState[VINEXT_INTERCEPTION_CONTEXT_HISTORY_STATE_KEY] = interceptionContext;
-  }
-
-  return Object.keys(nextState).length > 0 ? nextState : null;
-}
-
-function getRequestInterceptionContext(navigationKind: NavigationKind): string | null {
   switch (navigationKind) {
     case "navigate":
-      return getCurrentInterceptionContext();
-    case "traverse":
-      return readHistoryStateInterceptionContext(window.history.state);
-    case "refresh":
-      return null;
+      return {
+        interceptionContext: getCurrentInterceptionContext(),
+        previousNextUrl: getCurrentNextUrl(),
+      };
+    case "traverse": {
+      const previousNextUrl = readHistoryStatePreviousNextUrl(window.history.state);
+      return {
+        interceptionContext: resolveInterceptionContextFromPreviousNextUrl(
+          previousNextUrl,
+          __basePath,
+        ),
+        previousNextUrl,
+      };
+    }
+    case "refresh": {
+      const currentPreviousNextUrl = getBrowserRouterState().previousNextUrl;
+      return {
+        interceptionContext: resolveInterceptionContextFromPreviousNextUrl(
+          currentPreviousNextUrl,
+          __basePath,
+        ),
+        previousNextUrl: currentPreviousNextUrl,
+      };
+    }
     default: {
       const _exhaustive: never = navigationKind;
       throw new Error("[vinext] Unknown navigation kind: " + String(_exhaustive));
@@ -435,6 +443,7 @@ async function commitSameUrlNavigatePayload(
       pending.action.renderId,
       "navigate",
       pending.interceptionContext,
+      pending.previousNextUrl,
       pending.routeId,
       pending.rootLayoutTreePath,
       false,
@@ -468,6 +477,7 @@ function BrowserRoot({
     elements: resolvedElements,
     interceptionContext: initialMetadata.interceptionContext,
     navigationSnapshot: initialNavigationSnapshot,
+    previousNextUrl: null,
     renderId: 0,
     rootLayoutTreePath: initialMetadata.rootLayoutTreePath,
     routeId: initialMetadata.routeId,
@@ -511,14 +521,11 @@ function BrowserRoot({
     }
 
     replaceHistoryStateWithoutNotify(
-      createHistoryStateWithInterceptionContext(
-        window.history.state,
-        treeState.interceptionContext,
-      ),
+      createHistoryStateWithPreviousNextUrl(window.history.state, treeState.previousNextUrl),
       "",
       window.location.href,
     );
-  }, [treeState.interceptionContext, treeState.renderId]);
+  }, [treeState.previousNextUrl, treeState.renderId]);
 
   const committedTree = createElement(
     NavigationCommitSignal,
@@ -548,6 +555,7 @@ function dispatchBrowserTree(
   renderId: number,
   actionType: "navigate" | "replace" | "traverse",
   interceptionContext: string | null,
+  previousNextUrl: string | null,
   routeId: string,
   rootLayoutTreePath: string | null,
   useTransitionMode: boolean,
@@ -559,6 +567,7 @@ function dispatchBrowserTree(
       elements,
       interceptionContext,
       navigationSnapshot,
+      previousNextUrl,
       renderId,
       rootLayoutTreePath,
       routeId,
@@ -579,6 +588,7 @@ async function renderNavigationPayload(
   navId: number,
   historyUpdateMode: HistoryUpdateMode | undefined,
   params: Record<string, string | string[]>,
+  previousNextUrl: string | null,
   useTransition = true,
   actionType: "navigate" | "replace" | "traverse" = "navigate",
 ): Promise<void> {
@@ -594,6 +604,7 @@ async function renderNavigationPayload(
       currentState,
       nextElements: payload,
       navigationSnapshot,
+      previousNextUrl,
       renderId,
       type: actionType,
     });
@@ -620,12 +631,7 @@ async function renderNavigationPayload(
 
     queuePrePaintNavigationEffect(
       renderId,
-      createNavigationCommitEffect(
-        targetHref,
-        historyUpdateMode,
-        params,
-        pending.interceptionContext,
-      ),
+      createNavigationCommitEffect(targetHref, historyUpdateMode, params, pending.previousNextUrl),
     );
     activateNavigationSnapshot();
     snapshotActivated = true;
@@ -635,6 +641,7 @@ async function renderNavigationPayload(
       renderId,
       actionType,
       pending.interceptionContext,
+      pending.previousNextUrl,
       pending.routeId,
       pending.rootLayoutTreePath,
       useTransition,
@@ -747,8 +754,9 @@ function registerServerActionCallback(): void {
     const temporaryReferences = createTemporaryReferenceSet();
     const body = await encodeReply(args, { temporaryReferences });
 
-    // Intentionally omit interception context for server action re-renders in
-    // this PR. Durable intercepted refresh/action parity belongs to PR 5.
+    // Interception context on server-action re-renders is intentionally
+    // deferred: action POSTs always target the current URL's full page without
+    // propagating the source-route provenance.
     const fetchResponse = await fetch(toRscUrl(window.location.pathname + window.location.search), {
       method: "POST",
       headers: { "x-rsc-action": id },
@@ -814,6 +822,11 @@ async function main(): Promise<void> {
     window.location.href,
     latestClientParams,
   );
+  replaceHistoryStateWithoutNotify(
+    createHistoryStateWithPreviousNextUrl(window.history.state, null),
+    "",
+    window.location.href,
+  );
 
   window.__VINEXT_RSC_ROOT__ = hydrateRoot(
     document,
@@ -830,6 +843,7 @@ async function main(): Promise<void> {
     redirectDepth = 0,
     navigationKind: NavigationKind = "navigate",
     historyUpdateMode?: HistoryUpdateMode,
+    previousNextUrlOverride?: string | null,
   ): Promise<void> {
     if (redirectDepth > 10) {
       console.error(
@@ -846,7 +860,9 @@ async function main(): Promise<void> {
     try {
       const url = new URL(href, window.location.origin);
       const rscUrl = toRscUrl(url.pathname + url.search);
-      const requestInterceptionContext = getRequestInterceptionContext(navigationKind);
+      const requestState = getRequestState(navigationKind, previousNextUrlOverride);
+      const requestInterceptionContext = requestState.interceptionContext;
+      const requestPreviousNextUrl = requestState.previousNextUrl;
       // Use startTransition for same-route navigations (searchParam changes)
       // so React keeps the old UI visible during the transition. For cross-route
       // navigations (different pathname), use synchronous updates — React's
@@ -896,6 +912,7 @@ async function main(): Promise<void> {
             navId,
             historyUpdateMode,
             cachedParams,
+            requestPreviousNextUrl,
             isSameRoute,
             toActionType(navigationKind),
           );
@@ -943,7 +960,7 @@ async function main(): Promise<void> {
       if (finalUrl.pathname !== requestedUrl.pathname) {
         const destinationPath = finalUrl.pathname.replace(/\.rsc$/, "") + finalUrl.search;
         replaceHistoryStateWithoutNotify(
-          createHistoryStateWithInterceptionContext(null, requestInterceptionContext),
+          createHistoryStateWithPreviousNextUrl(null, requestPreviousNextUrl),
           "",
           destinationPath,
         );
@@ -957,7 +974,13 @@ async function main(): Promise<void> {
         // The URL has already been updated via replaceHistoryStateWithoutNotify above,
         // so the recursive navigation should NOT push/replace again. Pass undefined
         // for historyUpdateMode to make the commit effect a no-op for history updates.
-        return navigate(destinationPath, redirectDepth + 1, navigationKind, undefined);
+        return navigate(
+          destinationPath,
+          redirectDepth + 1,
+          navigationKind,
+          undefined,
+          requestPreviousNextUrl,
+        );
       }
 
       let navParams: Record<string, string | string[]> = {};
@@ -994,6 +1017,7 @@ async function main(): Promise<void> {
           navId,
           historyUpdateMode,
           navParams,
+          requestPreviousNextUrl,
           isSameRoute,
           toActionType(navigationKind),
         );
@@ -1070,8 +1094,9 @@ async function main(): Promise<void> {
           window.location.href,
           latestClientParams,
         );
-        // Intentionally omit interception context for HMR re-renders.
-        // Preserving intercepted modal state across HMR belongs to PR 5.
+        // Interception context on HMR re-renders is intentionally deferred:
+        // preserving intercepted modal state across HMR reloads is out of scope
+        // for the previousNextUrl mechanism.
         const pending = await createPendingNavigationCommit({
           currentState: getBrowserRouterState(),
           nextElements: normalizeAppElementsPromise(
@@ -1089,6 +1114,7 @@ async function main(): Promise<void> {
           pending.action.renderId,
           "replace",
           pending.interceptionContext,
+          pending.previousNextUrl,
           pending.routeId,
           pending.rootLayoutTreePath,
           false,

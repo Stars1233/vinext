@@ -353,6 +353,26 @@ const IMAGE_EXTS = "png|jpe?g|gif|webp|avif|svg|ico|bmp|tiff?";
 const _shimsDir = path.resolve(__dirname, "shims") + "/";
 const _fontGoogleShimPath = resolveShimModulePath(_shimsDir, "font-google");
 
+/**
+ * Shims with a `.react-server.ts` variant for the RSC environment.
+ * Maps import specifier → base shim name. In the RSC env, resolveId
+ * appends `.react-server`; in other envs it resolves to the base.
+ *
+ * These MUST NOT appear in `nextShimMap` (resolve.alias) because Vite's
+ * alias plugin runs before user `enforce:"pre"` plugins — aliases are
+ * unoverridable. Keeping them out of the alias lets the resolveId hook
+ * control resolution per-environment.
+ *
+ * To add a new react-server shim:
+ *   1. Create `<name>.react-server.ts` in src/shims/
+ *   2. Add entries here for each import specifier.
+ */
+const _reactServerShims = new Map<string, string>([
+  ["next/navigation", "navigation"],
+  ["next/navigation.js", "navigation"],
+  ["next/dist/client/components/navigation", "navigation"],
+]);
+
 const clientManualChunks = createClientManualChunks(_shimsDir);
 const clientOutputConfig = createClientOutputConfig(clientManualChunks);
 const clientCodeSplittingConfig = createClientCodeSplittingConfig(clientManualChunks);
@@ -839,7 +859,8 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             "next/config": path.join(shimsDir, "config"),
             "next/script": path.join(shimsDir, "script"),
             "next/server": path.join(shimsDir, "server"),
-            "next/navigation": path.join(shimsDir, "navigation"),
+            // "next/navigation" is NOT here — it's in _reactServerShims and
+            // handled by the resolveId hook for per-environment control (#834).
             "next/headers": path.join(shimsDir, "headers"),
             "next/font/google": path.join(shimsDir, "font-google"),
             "next/font/local": path.join(shimsDir, "font-local"),
@@ -896,7 +917,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               "work-unit-async-storage",
             ),
             // Re-export public modules for internal path imports
-            "next/dist/client/components/navigation": path.join(shimsDir, "navigation"),
+            // "next/dist/client/components/navigation" in _reactServerShims (#834).
             "next/dist/server/config-shared": path.join(shimsDir, "internal", "utils"),
             // server-only / client-only marker packages
             "server-only": path.join(shimsDir, "server-only"),
@@ -1172,9 +1193,23 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         // Merge incoming excludes into the top-level optimizeDeps so
         // Pages Router builds (which don't set per-environment configs)
         // also preserve entries from earlier plugins.
+        // Build a rolldown plugin for shims resolved via resolveId instead
+        // of resolve.alias. The dep optimizer's bundler uses its own
+        // rolldown pipeline (not the Vite plugin pipeline), so it needs
+        // these aliases injected separately. See #834.
+        const depOptimizeAliasPlugin = {
+          name: "vinext:dep-optimize-alias",
+          resolveId(id: string) {
+            const shimBase = _reactServerShims.get(id);
+            if (shimBase !== undefined) {
+              return resolveShimModulePath(shimsDir, shimBase);
+            }
+          },
+        };
         viteConfig.optimizeDeps = {
           exclude: [...new Set([...incomingExclude, "vinext", "@vercel/og"])],
           ...(incomingInclude.length > 0 ? { include: incomingInclude } : {}),
+          rolldownOptions: { plugins: [depOptimizeAliasPlugin] },
         };
         const pagesOptimizeEntries = !hasAppDir
           ? [
@@ -1527,6 +1562,19 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
               RESOLVED_VIRTUAL_GOOGLE_FONTS +
               cleanId.slice(queryIndex + VIRTUAL_GOOGLE_FONTS.length)
             );
+          }
+
+          // Shims with react-server variants — resolve per-environment.
+          // These are NOT in resolve.alias (Vite's alias plugin runs
+          // before enforce:"pre" plugins and can't be overridden).
+          // See https://github.com/cloudflare/vinext/issues/834
+          const reactServerShim = _reactServerShims.get(cleanId);
+          if (reactServerShim !== undefined) {
+            const shimName =
+              this.environment?.name === "rsc"
+                ? `${reactServerShim}.react-server`
+                : reactServerShim;
+            return resolveShimModulePath(_shimsDir, shimName);
           }
         },
       },

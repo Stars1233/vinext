@@ -407,8 +407,18 @@ import * as mod_10 from "/tmp/test/app/dashboard/not-found.tsx";
 
 
 
+// Build-time layout classification dispatch. Replaced in generateBundle
+// with a switch statement that returns a pre-computed per-layout
+// Map<layoutIndex, "static" | "dynamic"> for each route. Until the
+// plugin patches this stub, every route falls back to the Layer 3
+// runtime probe, which is the current (slow) behaviour.
+function __VINEXT_CLASS(routeIdx) {
+  return null;
+}
+
 const routes = [
   {
+    __buildTimeClassifications: __VINEXT_CLASS(0), // evaluated once at module load
     pattern: "/",
     patternParts: [],
     isDynamic: false,
@@ -432,6 +442,7 @@ const routes = [
     unauthorized: null,
   },
   {
+    __buildTimeClassifications: __VINEXT_CLASS(1), // evaluated once at module load
     pattern: "/about",
     patternParts: ["about"],
     isDynamic: false,
@@ -455,6 +466,7 @@ const routes = [
     unauthorized: null,
   },
   {
+    __buildTimeClassifications: __VINEXT_CLASS(2), // evaluated once at module load
     pattern: "/blog/:slug",
     patternParts: ["blog",":slug"],
     isDynamic: true,
@@ -478,6 +490,7 @@ const routes = [
     unauthorized: null,
   },
   {
+    __buildTimeClassifications: __VINEXT_CLASS(3), // evaluated once at module load
     pattern: "/dashboard",
     patternParts: ["dashboard"],
     isDynamic: false,
@@ -2162,6 +2175,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         const tp = route.layoutTreePositions?.[index] ?? 0;
         return "layout:" + __createAppPageTreePath(route.routeSegments, tp);
       },
+      buildTimeClassifications: route.__buildTimeClassifications,
       async runWithIsolatedDynamicScope(fn) {
         const priorDynamic = consumeDynamicUsage();
         try {
@@ -2666,8 +2680,18 @@ import * as mod_10 from "/tmp/test/app/dashboard/not-found.tsx";
 
 
 
+// Build-time layout classification dispatch. Replaced in generateBundle
+// with a switch statement that returns a pre-computed per-layout
+// Map<layoutIndex, "static" | "dynamic"> for each route. Until the
+// plugin patches this stub, every route falls back to the Layer 3
+// runtime probe, which is the current (slow) behaviour.
+function __VINEXT_CLASS(routeIdx) {
+  return null;
+}
+
 const routes = [
   {
+    __buildTimeClassifications: __VINEXT_CLASS(0), // evaluated once at module load
     pattern: "/",
     patternParts: [],
     isDynamic: false,
@@ -2691,6 +2715,7 @@ const routes = [
     unauthorized: null,
   },
   {
+    __buildTimeClassifications: __VINEXT_CLASS(1), // evaluated once at module load
     pattern: "/about",
     patternParts: ["about"],
     isDynamic: false,
@@ -2714,6 +2739,7 @@ const routes = [
     unauthorized: null,
   },
   {
+    __buildTimeClassifications: __VINEXT_CLASS(2), // evaluated once at module load
     pattern: "/blog/:slug",
     patternParts: ["blog",":slug"],
     isDynamic: true,
@@ -2737,6 +2763,7 @@ const routes = [
     unauthorized: null,
   },
   {
+    __buildTimeClassifications: __VINEXT_CLASS(3), // evaluated once at module load
     pattern: "/dashboard",
     patternParts: ["dashboard"],
     isDynamic: false,
@@ -4427,6 +4454,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         const tp = route.layoutTreePositions?.[index] ?? 0;
         return "layout:" + __createAppPageTreePath(route.routeSegments, tp);
       },
+      buildTimeClassifications: route.__buildTimeClassifications,
       async runWithIsolatedDynamicScope(fn) {
         const priorDynamic = consumeDynamicUsage();
         try {
@@ -4932,8 +4960,18 @@ import * as mod_11 from "/tmp/test/app/global-error.tsx";
 
 
 
+// Build-time layout classification dispatch. Replaced in generateBundle
+// with a switch statement that returns a pre-computed per-layout
+// Map<layoutIndex, "static" | "dynamic"> for each route. Until the
+// plugin patches this stub, every route falls back to the Layer 3
+// runtime probe, which is the current (slow) behaviour.
+function __VINEXT_CLASS(routeIdx) {
+  return null;
+}
+
 const routes = [
   {
+    __buildTimeClassifications: __VINEXT_CLASS(0), // evaluated once at module load
     pattern: "/",
     patternParts: [],
     isDynamic: false,
@@ -4957,6 +4995,7 @@ const routes = [
     unauthorized: null,
   },
   {
+    __buildTimeClassifications: __VINEXT_CLASS(1), // evaluated once at module load
     pattern: "/about",
     patternParts: ["about"],
     isDynamic: false,
@@ -4980,6 +5019,7 @@ const routes = [
     unauthorized: null,
   },
   {
+    __buildTimeClassifications: __VINEXT_CLASS(2), // evaluated once at module load
     pattern: "/blog/:slug",
     patternParts: ["blog",":slug"],
     isDynamic: true,
@@ -5003,6 +5043,7 @@ const routes = [
     unauthorized: null,
   },
   {
+    __buildTimeClassifications: __VINEXT_CLASS(3), // evaluated once at module load
     pattern: "/dashboard",
     patternParts: ["dashboard"],
     isDynamic: false,
@@ -6687,6 +6728,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         const tp = route.layoutTreePositions?.[index] ?? 0;
         return "layout:" + __createAppPageTreePath(route.routeSegments, tp);
       },
+      buildTimeClassifications: route.__buildTimeClassifications,
       async runWithIsolatedDynamicScope(fn) {
         const priorDynamic = consumeDynamicUsage();
         try {
@@ -7221,8 +7263,18 @@ async function __ensureInstrumentation() {
   return __instrumentationInitPromise;
 }
 
+// Build-time layout classification dispatch. Replaced in generateBundle
+// with a switch statement that returns a pre-computed per-layout
+// Map<layoutIndex, "static" | "dynamic"> for each route. Until the
+// plugin patches this stub, every route falls back to the Layer 3
+// runtime probe, which is the current (slow) behaviour.
+function __VINEXT_CLASS(routeIdx) {
+  return null;
+}
+
 const routes = [
   {
+    __buildTimeClassifications: __VINEXT_CLASS(0), // evaluated once at module load
     pattern: "/",
     patternParts: [],
     isDynamic: false,
@@ -7246,6 +7298,7 @@ const routes = [
     unauthorized: null,
   },
   {
+    __buildTimeClassifications: __VINEXT_CLASS(1), // evaluated once at module load
     pattern: "/about",
     patternParts: ["about"],
     isDynamic: false,
@@ -7269,6 +7322,7 @@ const routes = [
     unauthorized: null,
   },
   {
+    __buildTimeClassifications: __VINEXT_CLASS(2), // evaluated once at module load
     pattern: "/blog/:slug",
     patternParts: ["blog",":slug"],
     isDynamic: true,
@@ -7292,6 +7346,7 @@ const routes = [
     unauthorized: null,
   },
   {
+    __buildTimeClassifications: __VINEXT_CLASS(3), // evaluated once at module load
     pattern: "/dashboard",
     patternParts: ["dashboard"],
     isDynamic: false,
@@ -8979,6 +9034,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         const tp = route.layoutTreePositions?.[index] ?? 0;
         return "layout:" + __createAppPageTreePath(route.routeSegments, tp);
       },
+      buildTimeClassifications: route.__buildTimeClassifications,
       async runWithIsolatedDynamicScope(fn) {
         const priorDynamic = consumeDynamicUsage();
         try {
@@ -9484,8 +9540,18 @@ import * as mod_11 from "/tmp/test/app/sitemap.ts";
 
 
 
+// Build-time layout classification dispatch. Replaced in generateBundle
+// with a switch statement that returns a pre-computed per-layout
+// Map<layoutIndex, "static" | "dynamic"> for each route. Until the
+// plugin patches this stub, every route falls back to the Layer 3
+// runtime probe, which is the current (slow) behaviour.
+function __VINEXT_CLASS(routeIdx) {
+  return null;
+}
+
 const routes = [
   {
+    __buildTimeClassifications: __VINEXT_CLASS(0), // evaluated once at module load
     pattern: "/",
     patternParts: [],
     isDynamic: false,
@@ -9509,6 +9575,7 @@ const routes = [
     unauthorized: null,
   },
   {
+    __buildTimeClassifications: __VINEXT_CLASS(1), // evaluated once at module load
     pattern: "/about",
     patternParts: ["about"],
     isDynamic: false,
@@ -9532,6 +9599,7 @@ const routes = [
     unauthorized: null,
   },
   {
+    __buildTimeClassifications: __VINEXT_CLASS(2), // evaluated once at module load
     pattern: "/blog/:slug",
     patternParts: ["blog",":slug"],
     isDynamic: true,
@@ -9555,6 +9623,7 @@ const routes = [
     unauthorized: null,
   },
   {
+    __buildTimeClassifications: __VINEXT_CLASS(3), // evaluated once at module load
     pattern: "/dashboard",
     patternParts: ["dashboard"],
     isDynamic: false,
@@ -11245,6 +11314,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         const tp = route.layoutTreePositions?.[index] ?? 0;
         return "layout:" + __createAppPageTreePath(route.routeSegments, tp);
       },
+      buildTimeClassifications: route.__buildTimeClassifications,
       async runWithIsolatedDynamicScope(fn) {
         const priorDynamic = consumeDynamicUsage();
         try {
@@ -11749,8 +11819,18 @@ import * as mod_10 from "/tmp/test/app/dashboard/not-found.tsx";
 
 
 
+// Build-time layout classification dispatch. Replaced in generateBundle
+// with a switch statement that returns a pre-computed per-layout
+// Map<layoutIndex, "static" | "dynamic"> for each route. Until the
+// plugin patches this stub, every route falls back to the Layer 3
+// runtime probe, which is the current (slow) behaviour.
+function __VINEXT_CLASS(routeIdx) {
+  return null;
+}
+
 const routes = [
   {
+    __buildTimeClassifications: __VINEXT_CLASS(0), // evaluated once at module load
     pattern: "/",
     patternParts: [],
     isDynamic: false,
@@ -11774,6 +11854,7 @@ const routes = [
     unauthorized: null,
   },
   {
+    __buildTimeClassifications: __VINEXT_CLASS(1), // evaluated once at module load
     pattern: "/about",
     patternParts: ["about"],
     isDynamic: false,
@@ -11797,6 +11878,7 @@ const routes = [
     unauthorized: null,
   },
   {
+    __buildTimeClassifications: __VINEXT_CLASS(2), // evaluated once at module load
     pattern: "/blog/:slug",
     patternParts: ["blog",":slug"],
     isDynamic: true,
@@ -11820,6 +11902,7 @@ const routes = [
     unauthorized: null,
   },
   {
+    __buildTimeClassifications: __VINEXT_CLASS(3), // evaluated once at module load
     pattern: "/dashboard",
     patternParts: ["dashboard"],
     isDynamic: false,
@@ -13871,6 +13954,7 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
         const tp = route.layoutTreePositions?.[index] ?? 0;
         return "layout:" + __createAppPageTreePath(route.routeSegments, tp);
       },
+      buildTimeClassifications: route.__buildTimeClassifications,
       async runWithIsolatedDynamicScope(fn) {
         const priorDynamic = consumeDynamicUsage();
         try {

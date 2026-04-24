@@ -801,10 +801,84 @@ function restorePopstateScrollPosition(state: unknown): void {
   });
 }
 
-async function readInitialRscStream(): Promise<ReadableStream<Uint8Array>> {
+// Set on pagehide so the RSC navigation catch block can distinguish expected
+// fetch aborts (triggered by the unload itself) from real errors worth logging.
+let isPageUnloading = false;
+
+const RSC_RELOAD_KEY = "__vinext_rsc_initial_reload__";
+
+// sessionStorage can throw SecurityError in strict-mode iframes, storage-
+// disabled browsers, and some Safari private-browsing configurations. Wrap
+// every access so a recovery path for one error does not crash hydration.
+function readReloadFlag(): string | null {
+  try {
+    return sessionStorage.getItem(RSC_RELOAD_KEY);
+  } catch {
+    return null;
+  }
+}
+function writeReloadFlag(path: string): void {
+  try {
+    sessionStorage.setItem(RSC_RELOAD_KEY, path);
+  } catch {}
+}
+function clearReloadFlag(): void {
+  try {
+    sessionStorage.removeItem(RSC_RELOAD_KEY);
+  } catch {}
+}
+
+// A non-ok or wrong-content-type RSC response during initial hydration means
+// the server cannot deliver a valid RSC payload for this URL. Parsing the
+// response as RSC causes an opaque parse failure. On the first attempt,
+// reload once so the server has a chance to render the correct error page
+// as HTML. On the second attempt (detected via the sessionStorage flag), the
+// endpoint is persistently broken. Returns null so main() aborts the
+// hydration bootstrap without registering `__VINEXT_RSC_*` globals —
+// including during the brief window between reload() firing and the page
+// actually unloading — so external probes never see a half-hydrated page.
+function recoverFromBadInitialRscResponse(reason: string): null {
+  const currentPath = window.location.pathname + window.location.search;
+  if (readReloadFlag() === currentPath) {
+    clearReloadFlag();
+    console.error(
+      `[vinext] Initial RSC fetch ${reason} after reload; aborting hydration. ` +
+        "Server-rendered HTML remains visible; client components will not hydrate.",
+    );
+    return null;
+  }
+  writeReloadFlag(currentPath);
+  // Verify the write persisted. In storage-denied environments (strict-mode
+  // iframes, locked-down enterprise policies), every getItem returns null and
+  // every setItem silently no-ops, so the reload-loop guard cannot survive
+  // the reload — the page would loop forever. Abort instead so the user at
+  // least sees the server-rendered HTML.
+  if (readReloadFlag() !== currentPath) {
+    console.error(
+      `[vinext] Initial RSC fetch ${reason}; sessionStorage unavailable so the ` +
+        "reload-loop guard cannot persist — aborting hydration. " +
+        "Server-rendered HTML remains visible; client components will not hydrate.",
+    );
+    return null;
+  }
+  // One-shot diagnostic so a production reload is traceable. Only fires once
+  // per broken path thanks to the sessionStorage flag above; not noisy.
+  console.warn(
+    `[vinext] Initial RSC fetch ${reason}; reloading once to let the server render the HTML error page`,
+  );
+  window.location.reload();
+  return null;
+}
+
+async function readInitialRscStream(): Promise<ReadableStream<Uint8Array> | null> {
   const vinext = getVinextBrowserGlobal();
 
   if (vinext.__VINEXT_RSC__ || vinext.__VINEXT_RSC_CHUNKS__ || vinext.__VINEXT_RSC_DONE__) {
+    // Reaching the embedded-RSC branch means the server successfully rendered
+    // the page — any prior reload flag for this path is stale and must be
+    // cleared so a future failure gets its own fresh recovery attempt.
+    clearReloadFlag();
+
     if (vinext.__VINEXT_RSC__) {
       const embedData = vinext.__VINEXT_RSC__;
       delete vinext.__VINEXT_RSC__;
@@ -841,6 +915,29 @@ async function readInitialRscStream(): Promise<ReadableStream<Uint8Array>> {
 
   const rscResponse = await fetch(toRscUrl(window.location.pathname + window.location.search));
 
+  if (!rscResponse.ok) {
+    return recoverFromBadInitialRscResponse(`returned ${rscResponse.status}`);
+  }
+  // Guard against proxies/CDNs that return 200 with a rewritten Content-Type
+  // (e.g. text/html instead of text/x-component). Such responses cannot be
+  // parsed as RSC and would throw the same opaque parse error this fallback
+  // exists to prevent.
+  const contentType = rscResponse.headers.get("content-type") ?? "";
+  if (!contentType.startsWith("text/x-component")) {
+    return recoverFromBadInitialRscResponse(
+      `returned non-RSC content-type "${contentType || "(missing)"}"`,
+    );
+  }
+  // Missing body (e.g. 204 No Content, or an edge worker that returned ok
+  // headers without piping the stream) fails the same way downstream.
+  // Matches Next.js' `!res.body` branch in fetch-server-response.ts.
+  if (!rscResponse.body) {
+    return recoverFromBadInitialRscResponse("returned empty body");
+  }
+  // Successful RSC response clears the guard so a subsequent reload of the
+  // same path after a transient failure still gets one recovery attempt.
+  clearReloadFlag();
+
   let params: Record<string, string | string[]> = {};
   const paramsHeader = rscResponse.headers.get("X-Vinext-Params");
   if (paramsHeader) {
@@ -853,10 +950,6 @@ async function readInitialRscStream(): Promise<ReadableStream<Uint8Array>> {
   }
 
   restoreHydrationNavigationContext(window.location.pathname, window.location.search, params);
-
-  if (!rscResponse.body) {
-    throw new Error("[vinext] Initial RSC response had no body");
-  }
 
   return rscResponse.body;
 }
@@ -939,6 +1032,16 @@ async function main(): Promise<void> {
   registerServerActionCallback();
 
   const rscStream = await readInitialRscStream();
+  // null signals that readInitialRscStream aborted hydration — either because
+  // a reload is in flight (first-attempt recovery) or the endpoint is
+  // persistently broken (post-reload). Bootstrap is a separate synchronous
+  // helper so the null-branch structurally cannot reach any __VINEXT_RSC_*
+  // global assignment, even if a future refactor interposes async work here.
+  if (rscStream === null) return;
+  bootstrapHydration(rscStream);
+}
+
+function bootstrapHydration(rscStream: ReadableStream<Uint8Array>): void {
   const root = normalizeAppElementsPromise(createFromReadableStream<AppWireElements>(rscStream));
   const initialNavigationSnapshot = createClientNavigationRenderSnapshot(
     window.location.href,
@@ -1100,6 +1203,55 @@ async function main(): Promise<void> {
 
         if (navId !== activeNavigationId) return;
 
+        // Any response that isn't a valid RSC payload (non-ok status,
+        // missing/rewritten Content-Type, or missing body) means the server
+        // returned something we cannot parse — typically an HTML error page
+        // or a proxy-rewritten response. Parsing such a body as an RSC stream
+        // throws a cryptic "Connection closed" error. Match Next.js behavior
+        // (fetch-server-response.ts:211, `!isFlightResponse || !res.ok || !res.body`):
+        // hard-navigate to the response URL so the server can render the correct
+        // error page as HTML. The outer finally handles
+        // settlePendingBrowserRouterState and clearPendingPathname on this
+        // return path.
+        //
+        // Prefer the post-redirect response URL over `currentHref`: on a
+        // redirect chain like `/old` → 307 → `/new` → 500, the browser's
+        // fetch already followed the redirect, so `navResponse.url` is the
+        // failing `/new` destination. Hard-navigating there directly avoids
+        // bouncing off `/old` just to re-follow the same 307, which would
+        // flash the wrong URL in the address bar and mis-key analytics.
+        // Matches Next.js' `doMpaNavigation(responseUrl.toString())`. Falls
+        // back to `currentHref` when no response URL is available.
+        const navContentType = navResponse.headers.get("content-type") ?? "";
+        const isRscResponse = navContentType.startsWith("text/x-component");
+        if (!navResponse.ok || !isRscResponse || !navResponse.body) {
+          const responseUrl = navResponseUrl ?? navResponse.url;
+          let hardNavTarget = currentHref;
+          if (responseUrl) {
+            const parsed = new URL(responseUrl, window.location.origin);
+            const origUrl = new URL(currentHref, window.location.origin);
+            let pathname = parsed.pathname.replace(/\.rsc$/, "");
+            // toRscUrl strips trailing slash before appending .rsc, so the
+            // response URL loses it on the round-trip. Restore it when the
+            // original href had one so sites with trailingSlash:true don't
+            // incur an extra 308 to the canonical form on the error path.
+            if (
+              origUrl.pathname.length > 1 &&
+              origUrl.pathname.endsWith("/") &&
+              !pathname.endsWith("/")
+            ) {
+              pathname += "/";
+            }
+            hardNavTarget = pathname + parsed.search;
+            // Preserve the hash from the user's clicked href — a .rsc response
+            // URL never carries a fragment, so dropping it would silently strip
+            // `/foo#section` down to `/foo`.
+            if (origUrl.hash) hardNavTarget += origUrl.hash;
+          }
+          window.location.href = hardNavTarget;
+          return;
+        }
+
         const finalUrl = new URL(navResponseUrl ?? navResponse.url, window.location.origin);
         const requestedUrl = new URL(rscUrl, window.location.origin);
 
@@ -1200,7 +1352,13 @@ async function main(): Promise<void> {
       // Don't hard-navigate to a stale URL if this navigation was superseded by
       // a newer one — the newer navigation is already in flight and would be clobbered.
       if (navId !== activeNavigationId) return;
-      console.error("[vinext] RSC navigation error:", error);
+      // Suppress the diagnostic when the page is unloading: a hard-nav or anchor
+      // click tears down the document and aborts any in-flight RSC fetch, which
+      // surfaces here as an error. The page is already going away, so the log
+      // is just noise. Mirrors Next.js' isPageUnloading pattern.
+      if (!isPageUnloading) {
+        console.error("[vinext] RSC navigation error:", error);
+      }
       window.location.href = currentHref;
     } finally {
       // Single settlement site: covers normal return, early returns on stale-id
@@ -1282,5 +1440,15 @@ async function main(): Promise<void> {
 }
 
 if (typeof document !== "undefined") {
+  window.addEventListener("pagehide", () => {
+    isPageUnloading = true;
+  });
+  // Reset on pageshow so a bfcache-restored document does not resume with
+  // the flag stuck at true, which would silently swallow every subsequent
+  // RSC navigation error for the lifetime of that tab. Matches Next.js'
+  // fetch-server-response.ts handler pair.
+  window.addEventListener("pageshow", () => {
+    isPageUnloading = false;
+  });
   void main();
 }

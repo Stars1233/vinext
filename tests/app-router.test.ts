@@ -4666,6 +4666,13 @@ describe("generateRscEntry ISR code generation", () => {
     expect(actionResponseBody).toContain("mergeMiddlewareResponseHeaders");
   });
 
+  it("generated code accepts both vinext and Next.js action header names", () => {
+    const code = generateRscEntry("/tmp/test/app", minimalRoutes);
+    expect(code).toContain(
+      'request.headers.get("x-rsc-action") ?? request.headers.get("next-action")',
+    );
+  });
+
   it("generated code merges middleware headers into server action redirect responses", () => {
     const code = generateRscEntry("/tmp/test/app", minimalRoutes);
     // The server action redirect path must call mergeMiddlewareResponseHeaders

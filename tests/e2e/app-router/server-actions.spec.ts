@@ -57,6 +57,35 @@ test.describe("Server Actions", () => {
     await expect(page.locator('[data-testid="like-btn"]')).toBeVisible();
   });
 
+  // Ported from Next.js:
+  // test/e2e/app-dir/actions/app-action-progressive-enhancement.test.ts
+  // https://github.com/vercel/next.js/blob/canary/test/e2e/app-dir/actions/app-action-progressive-enhancement.test.ts
+  test("server action formData redirect works without JavaScript", async ({ browser }) => {
+    let actionResponseStatus: number | undefined;
+    const context = await browser.newContext({ javaScriptEnabled: false });
+    const page = await context.newPage();
+    page.on("response", (response) => {
+      const url = new URL(response.url());
+      if (url.pathname === "/nextjs-compat/action-progressive") {
+        actionResponseStatus = response.status();
+      }
+    });
+
+    try {
+      await page.goto(`${BASE}/nextjs-compat/action-progressive`);
+      await page.fill("#name", "test");
+      await page.click("#submit");
+
+      await expect(page).toHaveURL(
+        `${BASE}/nextjs-compat/action-progressive/result?name=test&hidden-info=hi`,
+      );
+      await expect(page.locator("h1")).toHaveText("Action Progressive Result");
+      expect(actionResponseStatus).toBe(303);
+    } finally {
+      await context.close();
+    }
+  });
+
   test("server action with redirect() navigates to target page", async ({ page }) => {
     await page.goto(`${BASE}/action-redirect-test`);
     await expect(page.locator("h1")).toHaveText("Action Redirect Test");

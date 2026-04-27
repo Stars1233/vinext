@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   getAppRouteHandlerRevalidateSeconds,
   hasAppRouteHandlerDefaultExport,
+  isPossibleAppRouteActionRequest,
   resolveAppRouteHandlerMethod,
   resolveAppRouteHandlerSpecialError,
   shouldApplyAppRouteHandlerRevalidateHeader,
@@ -150,6 +151,18 @@ describe("app route handler policy helpers", () => {
 
     expect(
       resolveAppRouteHandlerSpecialError(
+        { digest: "NEXT_REDIRECT;replace;%2Ftarget%3Fok%3D1;308" },
+        "https://example.com/source",
+        { isAction: true },
+      ),
+    ).toEqual({
+      kind: "redirect",
+      location: "https://example.com/target?ok=1",
+      statusCode: 303,
+    });
+
+    expect(
+      resolveAppRouteHandlerSpecialError(
         { digest: "NEXT_NOT_FOUND" },
         "https://example.com/source",
       ),
@@ -171,5 +184,64 @@ describe("app route handler policy helpers", () => {
     expect(resolveAppRouteHandlerSpecialError(new Error("no digest"), "https://example.com")).toBe(
       null,
     );
+  });
+
+  it("classifies possible app-route action requests like Next.js", () => {
+    expect(
+      isPossibleAppRouteActionRequest(
+        new Request("https://example.com/api", {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isPossibleAppRouteActionRequest(
+        new Request("https://example.com/api", {
+          method: "POST",
+          headers: { "content-type": "multipart/form-data; boundary=test" },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isPossibleAppRouteActionRequest(
+        new Request("https://example.com/api", {
+          method: "POST",
+          headers: { "x-rsc-action": "abc" },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isPossibleAppRouteActionRequest(
+        new Request("https://example.com/api", {
+          method: "POST",
+          headers: { "next-action": "abc" },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isPossibleAppRouteActionRequest(
+        new Request("https://example.com/api", {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded; charset=UTF-8" },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isPossibleAppRouteActionRequest(
+        new Request("https://example.com/api", {
+          method: "GET",
+          headers: { "content-type": "multipart/form-data; boundary=test" },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isPossibleAppRouteActionRequest(
+        new Request("https://example.com/api", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    ).toBe(false);
   });
 });

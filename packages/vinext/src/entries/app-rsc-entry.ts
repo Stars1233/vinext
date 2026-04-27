@@ -49,6 +49,10 @@ const appRouteHandlerExecutionPath = resolveEntryPath(
   "../server/app-route-handler-execution.js",
   import.meta.url,
 );
+const appServerActionExecutionPath = resolveEntryPath(
+  "../server/app-server-action-execution.js",
+  import.meta.url,
+);
 const appRouteHandlerCachePath = resolveEntryPath(
   "../server/app-route-handler-cache.js",
   import.meta.url,
@@ -326,6 +330,7 @@ ${slotEntries.join(",\n")}
   return `
 import {
   renderToReadableStream as _renderToReadableStream,
+  decodeAction,
   decodeReply,
   loadServerAction,
   createTemporaryReferenceSet,
@@ -385,6 +390,9 @@ import {
 import {
   executeAppRouteHandler as __executeAppRouteHandler,
 } from ${JSON.stringify(appRouteHandlerExecutionPath)};
+import {
+  handleProgressiveServerActionRequest as __handleProgressiveServerActionRequest,
+} from ${JSON.stringify(appServerActionExecutionPath)};
 import { readAppRouteHandlerCacheResponse as __readAppRouteHandlerCacheResponse } from ${JSON.stringify(appRouteHandlerCachePath)};
 import { readAppPageCacheResponse as __readAppPageCacheResponse } from ${JSON.stringify(appPageCachePath)};
 import {
@@ -1779,7 +1787,29 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   });
 
   // Handle server action POST requests
-  const actionId = request.headers.get("x-rsc-action");
+  const actionId = request.headers.get("x-rsc-action") ?? request.headers.get("next-action");
+  const actionContentType = request.headers.get("content-type") || "";
+  const progressiveActionResponse = await __handleProgressiveServerActionRequest({
+    actionId,
+    allowedOrigins: __allowedOrigins,
+    cleanPathname,
+    clearRequestContext() {
+      setHeadersContext(null);
+      setNavigationContext(null);
+    },
+    contentType: actionContentType,
+    decodeAction,
+    getAndClearPendingCookies,
+    getDraftModeCookieHeader,
+    maxActionBodySize: __MAX_ACTION_BODY_SIZE,
+    middlewareHeaders: _mwCtx.headers,
+    readFormDataWithLimit: __readFormDataWithLimit,
+    reportRequestError: _reportRequestError,
+    request,
+    setHeadersAccessPhase,
+  });
+  if (progressiveActionResponse) return progressiveActionResponse;
+
   if (request.method === "POST" && actionId) {
     // ── CSRF protection ─────────────────────────────────────────────────
     // Verify that the Origin header matches the Host header to prevent
@@ -1799,10 +1829,9 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     }
 
     try {
-      const contentType = request.headers.get("content-type") || "";
       let body;
       try {
-        body = contentType.startsWith("multipart/form-data")
+        body = actionContentType.startsWith("multipart/form-data")
           ? await __readFormDataWithLimit(request, __MAX_ACTION_BODY_SIZE)
           : await __readBodyWithLimit(request, __MAX_ACTION_BODY_SIZE);
       } catch (sizeErr) {

@@ -6,6 +6,7 @@ exports[`App Router entry templates > generateRscEntry snapshot (minimal routes)
 "
 import {
   renderToReadableStream as _renderToReadableStream,
+  decodeAction,
   decodeReply,
   loadServerAction,
   createTemporaryReferenceSet,
@@ -65,6 +66,9 @@ import {
 import {
   executeAppRouteHandler as __executeAppRouteHandler,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-execution.js";
+import {
+  handleProgressiveServerActionRequest as __handleProgressiveServerActionRequest,
+} from "<ROOT>/packages/vinext/src/server/app-server-action-execution.js";
 import { readAppRouteHandlerCacheResponse as __readAppRouteHandlerCacheResponse } from "<ROOT>/packages/vinext/src/server/app-route-handler-cache.js";
 import { readAppPageCacheResponse as __readAppPageCacheResponse } from "<ROOT>/packages/vinext/src/server/app-page-cache.js";
 import {
@@ -1499,7 +1503,29 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   });
 
   // Handle server action POST requests
-  const actionId = request.headers.get("x-rsc-action");
+  const actionId = request.headers.get("x-rsc-action") ?? request.headers.get("next-action");
+  const actionContentType = request.headers.get("content-type") || "";
+  const progressiveActionResponse = await __handleProgressiveServerActionRequest({
+    actionId,
+    allowedOrigins: __allowedOrigins,
+    cleanPathname,
+    clearRequestContext() {
+      setHeadersContext(null);
+      setNavigationContext(null);
+    },
+    contentType: actionContentType,
+    decodeAction,
+    getAndClearPendingCookies,
+    getDraftModeCookieHeader,
+    maxActionBodySize: __MAX_ACTION_BODY_SIZE,
+    middlewareHeaders: _mwCtx.headers,
+    readFormDataWithLimit: __readFormDataWithLimit,
+    reportRequestError: _reportRequestError,
+    request,
+    setHeadersAccessPhase,
+  });
+  if (progressiveActionResponse) return progressiveActionResponse;
+
   if (request.method === "POST" && actionId) {
     // ── CSRF protection ─────────────────────────────────────────────────
     // Verify that the Origin header matches the Host header to prevent
@@ -1519,10 +1545,9 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     }
 
     try {
-      const contentType = request.headers.get("content-type") || "";
       let body;
       try {
-        body = contentType.startsWith("multipart/form-data")
+        body = actionContentType.startsWith("multipart/form-data")
           ? await __readFormDataWithLimit(request, __MAX_ACTION_BODY_SIZE)
           : await __readBodyWithLimit(request, __MAX_ACTION_BODY_SIZE);
       } catch (sizeErr) {
@@ -2370,6 +2395,7 @@ exports[`App Router entry templates > generateRscEntry snapshot (with config) 1`
 "
 import {
   renderToReadableStream as _renderToReadableStream,
+  decodeAction,
   decodeReply,
   loadServerAction,
   createTemporaryReferenceSet,
@@ -2429,6 +2455,9 @@ import {
 import {
   executeAppRouteHandler as __executeAppRouteHandler,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-execution.js";
+import {
+  handleProgressiveServerActionRequest as __handleProgressiveServerActionRequest,
+} from "<ROOT>/packages/vinext/src/server/app-server-action-execution.js";
 import { readAppRouteHandlerCacheResponse as __readAppRouteHandlerCacheResponse } from "<ROOT>/packages/vinext/src/server/app-route-handler-cache.js";
 import { readAppPageCacheResponse as __readAppPageCacheResponse } from "<ROOT>/packages/vinext/src/server/app-page-cache.js";
 import {
@@ -3869,7 +3898,29 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   });
 
   // Handle server action POST requests
-  const actionId = request.headers.get("x-rsc-action");
+  const actionId = request.headers.get("x-rsc-action") ?? request.headers.get("next-action");
+  const actionContentType = request.headers.get("content-type") || "";
+  const progressiveActionResponse = await __handleProgressiveServerActionRequest({
+    actionId,
+    allowedOrigins: __allowedOrigins,
+    cleanPathname,
+    clearRequestContext() {
+      setHeadersContext(null);
+      setNavigationContext(null);
+    },
+    contentType: actionContentType,
+    decodeAction,
+    getAndClearPendingCookies,
+    getDraftModeCookieHeader,
+    maxActionBodySize: __MAX_ACTION_BODY_SIZE,
+    middlewareHeaders: _mwCtx.headers,
+    readFormDataWithLimit: __readFormDataWithLimit,
+    reportRequestError: _reportRequestError,
+    request,
+    setHeadersAccessPhase,
+  });
+  if (progressiveActionResponse) return progressiveActionResponse;
+
   if (request.method === "POST" && actionId) {
     // ── CSRF protection ─────────────────────────────────────────────────
     // Verify that the Origin header matches the Host header to prevent
@@ -3889,10 +3940,9 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     }
 
     try {
-      const contentType = request.headers.get("content-type") || "";
       let body;
       try {
-        body = contentType.startsWith("multipart/form-data")
+        body = actionContentType.startsWith("multipart/form-data")
           ? await __readFormDataWithLimit(request, __MAX_ACTION_BODY_SIZE)
           : await __readBodyWithLimit(request, __MAX_ACTION_BODY_SIZE);
       } catch (sizeErr) {
@@ -4740,6 +4790,7 @@ exports[`App Router entry templates > generateRscEntry snapshot (with global err
 "
 import {
   renderToReadableStream as _renderToReadableStream,
+  decodeAction,
   decodeReply,
   loadServerAction,
   createTemporaryReferenceSet,
@@ -4799,6 +4850,9 @@ import {
 import {
   executeAppRouteHandler as __executeAppRouteHandler,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-execution.js";
+import {
+  handleProgressiveServerActionRequest as __handleProgressiveServerActionRequest,
+} from "<ROOT>/packages/vinext/src/server/app-server-action-execution.js";
 import { readAppRouteHandlerCacheResponse as __readAppRouteHandlerCacheResponse } from "<ROOT>/packages/vinext/src/server/app-route-handler-cache.js";
 import { readAppPageCacheResponse as __readAppPageCacheResponse } from "<ROOT>/packages/vinext/src/server/app-page-cache.js";
 import {
@@ -6234,7 +6288,29 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   });
 
   // Handle server action POST requests
-  const actionId = request.headers.get("x-rsc-action");
+  const actionId = request.headers.get("x-rsc-action") ?? request.headers.get("next-action");
+  const actionContentType = request.headers.get("content-type") || "";
+  const progressiveActionResponse = await __handleProgressiveServerActionRequest({
+    actionId,
+    allowedOrigins: __allowedOrigins,
+    cleanPathname,
+    clearRequestContext() {
+      setHeadersContext(null);
+      setNavigationContext(null);
+    },
+    contentType: actionContentType,
+    decodeAction,
+    getAndClearPendingCookies,
+    getDraftModeCookieHeader,
+    maxActionBodySize: __MAX_ACTION_BODY_SIZE,
+    middlewareHeaders: _mwCtx.headers,
+    readFormDataWithLimit: __readFormDataWithLimit,
+    reportRequestError: _reportRequestError,
+    request,
+    setHeadersAccessPhase,
+  });
+  if (progressiveActionResponse) return progressiveActionResponse;
+
   if (request.method === "POST" && actionId) {
     // ── CSRF protection ─────────────────────────────────────────────────
     // Verify that the Origin header matches the Host header to prevent
@@ -6254,10 +6330,9 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     }
 
     try {
-      const contentType = request.headers.get("content-type") || "";
       let body;
       try {
-        body = contentType.startsWith("multipart/form-data")
+        body = actionContentType.startsWith("multipart/form-data")
           ? await __readFormDataWithLimit(request, __MAX_ACTION_BODY_SIZE)
           : await __readBodyWithLimit(request, __MAX_ACTION_BODY_SIZE);
       } catch (sizeErr) {
@@ -7105,6 +7180,7 @@ exports[`App Router entry templates > generateRscEntry snapshot (with instrument
 "
 import {
   renderToReadableStream as _renderToReadableStream,
+  decodeAction,
   decodeReply,
   loadServerAction,
   createTemporaryReferenceSet,
@@ -7164,6 +7240,9 @@ import {
 import {
   executeAppRouteHandler as __executeAppRouteHandler,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-execution.js";
+import {
+  handleProgressiveServerActionRequest as __handleProgressiveServerActionRequest,
+} from "<ROOT>/packages/vinext/src/server/app-server-action-execution.js";
 import { readAppRouteHandlerCacheResponse as __readAppRouteHandlerCacheResponse } from "<ROOT>/packages/vinext/src/server/app-route-handler-cache.js";
 import { readAppPageCacheResponse as __readAppPageCacheResponse } from "<ROOT>/packages/vinext/src/server/app-page-cache.js";
 import {
@@ -8631,7 +8710,29 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   });
 
   // Handle server action POST requests
-  const actionId = request.headers.get("x-rsc-action");
+  const actionId = request.headers.get("x-rsc-action") ?? request.headers.get("next-action");
+  const actionContentType = request.headers.get("content-type") || "";
+  const progressiveActionResponse = await __handleProgressiveServerActionRequest({
+    actionId,
+    allowedOrigins: __allowedOrigins,
+    cleanPathname,
+    clearRequestContext() {
+      setHeadersContext(null);
+      setNavigationContext(null);
+    },
+    contentType: actionContentType,
+    decodeAction,
+    getAndClearPendingCookies,
+    getDraftModeCookieHeader,
+    maxActionBodySize: __MAX_ACTION_BODY_SIZE,
+    middlewareHeaders: _mwCtx.headers,
+    readFormDataWithLimit: __readFormDataWithLimit,
+    reportRequestError: _reportRequestError,
+    request,
+    setHeadersAccessPhase,
+  });
+  if (progressiveActionResponse) return progressiveActionResponse;
+
   if (request.method === "POST" && actionId) {
     // ── CSRF protection ─────────────────────────────────────────────────
     // Verify that the Origin header matches the Host header to prevent
@@ -8651,10 +8752,9 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     }
 
     try {
-      const contentType = request.headers.get("content-type") || "";
       let body;
       try {
-        body = contentType.startsWith("multipart/form-data")
+        body = actionContentType.startsWith("multipart/form-data")
           ? await __readFormDataWithLimit(request, __MAX_ACTION_BODY_SIZE)
           : await __readBodyWithLimit(request, __MAX_ACTION_BODY_SIZE);
       } catch (sizeErr) {
@@ -9502,6 +9602,7 @@ exports[`App Router entry templates > generateRscEntry snapshot (with metadata r
 "
 import {
   renderToReadableStream as _renderToReadableStream,
+  decodeAction,
   decodeReply,
   loadServerAction,
   createTemporaryReferenceSet,
@@ -9561,6 +9662,9 @@ import {
 import {
   executeAppRouteHandler as __executeAppRouteHandler,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-execution.js";
+import {
+  handleProgressiveServerActionRequest as __handleProgressiveServerActionRequest,
+} from "<ROOT>/packages/vinext/src/server/app-server-action-execution.js";
 import { readAppRouteHandlerCacheResponse as __readAppRouteHandlerCacheResponse } from "<ROOT>/packages/vinext/src/server/app-route-handler-cache.js";
 import { readAppPageCacheResponse as __readAppPageCacheResponse } from "<ROOT>/packages/vinext/src/server/app-page-cache.js";
 import {
@@ -11002,7 +11106,29 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   });
 
   // Handle server action POST requests
-  const actionId = request.headers.get("x-rsc-action");
+  const actionId = request.headers.get("x-rsc-action") ?? request.headers.get("next-action");
+  const actionContentType = request.headers.get("content-type") || "";
+  const progressiveActionResponse = await __handleProgressiveServerActionRequest({
+    actionId,
+    allowedOrigins: __allowedOrigins,
+    cleanPathname,
+    clearRequestContext() {
+      setHeadersContext(null);
+      setNavigationContext(null);
+    },
+    contentType: actionContentType,
+    decodeAction,
+    getAndClearPendingCookies,
+    getDraftModeCookieHeader,
+    maxActionBodySize: __MAX_ACTION_BODY_SIZE,
+    middlewareHeaders: _mwCtx.headers,
+    readFormDataWithLimit: __readFormDataWithLimit,
+    reportRequestError: _reportRequestError,
+    request,
+    setHeadersAccessPhase,
+  });
+  if (progressiveActionResponse) return progressiveActionResponse;
+
   if (request.method === "POST" && actionId) {
     // ── CSRF protection ─────────────────────────────────────────────────
     // Verify that the Origin header matches the Host header to prevent
@@ -11022,10 +11148,9 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     }
 
     try {
-      const contentType = request.headers.get("content-type") || "";
       let body;
       try {
-        body = contentType.startsWith("multipart/form-data")
+        body = actionContentType.startsWith("multipart/form-data")
           ? await __readFormDataWithLimit(request, __MAX_ACTION_BODY_SIZE)
           : await __readBodyWithLimit(request, __MAX_ACTION_BODY_SIZE);
       } catch (sizeErr) {
@@ -11873,6 +11998,7 @@ exports[`App Router entry templates > generateRscEntry snapshot (with middleware
 "
 import {
   renderToReadableStream as _renderToReadableStream,
+  decodeAction,
   decodeReply,
   loadServerAction,
   createTemporaryReferenceSet,
@@ -11932,6 +12058,9 @@ import {
 import {
   executeAppRouteHandler as __executeAppRouteHandler,
 } from "<ROOT>/packages/vinext/src/server/app-route-handler-execution.js";
+import {
+  handleProgressiveServerActionRequest as __handleProgressiveServerActionRequest,
+} from "<ROOT>/packages/vinext/src/server/app-server-action-execution.js";
 import { readAppRouteHandlerCacheResponse as __readAppRouteHandlerCacheResponse } from "<ROOT>/packages/vinext/src/server/app-route-handler-cache.js";
 import { readAppPageCacheResponse as __readAppPageCacheResponse } from "<ROOT>/packages/vinext/src/server/app-page-cache.js";
 import {
@@ -13733,7 +13862,29 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
   });
 
   // Handle server action POST requests
-  const actionId = request.headers.get("x-rsc-action");
+  const actionId = request.headers.get("x-rsc-action") ?? request.headers.get("next-action");
+  const actionContentType = request.headers.get("content-type") || "";
+  const progressiveActionResponse = await __handleProgressiveServerActionRequest({
+    actionId,
+    allowedOrigins: __allowedOrigins,
+    cleanPathname,
+    clearRequestContext() {
+      setHeadersContext(null);
+      setNavigationContext(null);
+    },
+    contentType: actionContentType,
+    decodeAction,
+    getAndClearPendingCookies,
+    getDraftModeCookieHeader,
+    maxActionBodySize: __MAX_ACTION_BODY_SIZE,
+    middlewareHeaders: _mwCtx.headers,
+    readFormDataWithLimit: __readFormDataWithLimit,
+    reportRequestError: _reportRequestError,
+    request,
+    setHeadersAccessPhase,
+  });
+  if (progressiveActionResponse) return progressiveActionResponse;
+
   if (request.method === "POST" && actionId) {
     // ── CSRF protection ─────────────────────────────────────────────────
     // Verify that the Origin header matches the Host header to prevent
@@ -13753,10 +13904,9 @@ async function _handleRequest(request, __reqCtx, _mwCtx) {
     }
 
     try {
-      const contentType = request.headers.get("content-type") || "";
       let body;
       try {
-        body = contentType.startsWith("multipart/form-data")
+        body = actionContentType.startsWith("multipart/form-data")
           ? await __readFormDataWithLimit(request, __MAX_ACTION_BODY_SIZE)
           : await __readBodyWithLimit(request, __MAX_ACTION_BODY_SIZE);
       } catch (sizeErr) {

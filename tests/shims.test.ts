@@ -4967,6 +4967,42 @@ describe("NextURL basePath and locale properties", () => {
     expect(req.nextUrl.href).toBe("http://localhost/app/fr/dashboard");
   });
 
+  it("NextRequest.url reflects the normalized nextUrl href", async () => {
+    const { NextRequest } = await import("../packages/vinext/src/shims/server.js");
+    const req = new NextRequest("http://localhost/fr/dashboard?tab=settings", {
+      nextConfig: {
+        basePath: "/app",
+        i18n: { locales: ["en", "fr"], defaultLocale: "en" },
+      },
+    });
+
+    expect(req.nextUrl.href).toBe("http://localhost/app/fr/dashboard?tab=settings");
+    expect(req.url).toBe(req.nextUrl.href);
+  });
+
+  it("NextRequest.url preserves raw input when middleware URL normalization is disabled", async () => {
+    const previous = process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE;
+    process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE = "1";
+    try {
+      const { NextRequest } = await import("../packages/vinext/src/shims/server.js");
+      const req = new NextRequest("http://localhost/fr/dashboard?tab=settings", {
+        nextConfig: {
+          basePath: "/app",
+          i18n: { locales: ["en", "fr"], defaultLocale: "en" },
+        },
+      });
+
+      expect(req.nextUrl.href).toBe("http://localhost/app/fr/dashboard?tab=settings");
+      expect(req.url).toBe("http://localhost/fr/dashboard?tab=settings");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE;
+      } else {
+        process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE = previous;
+      }
+    }
+  });
+
   it("NextRequest passes config when input is a Request object", async () => {
     const { NextRequest } = await import("../packages/vinext/src/shims/server.js");
     const raw = new Request("http://localhost/app/fr/dashboard");
@@ -4980,6 +5016,20 @@ describe("NextURL basePath and locale properties", () => {
     expect(req.nextUrl.locale).toBe("fr");
     expect(req.nextUrl.pathname).toBe("/dashboard");
     expect(req.nextUrl.href).toBe("http://localhost/app/fr/dashboard");
+  });
+
+  it("NextRequest.url normalizes Request input through nextUrl", async () => {
+    const { NextRequest } = await import("../packages/vinext/src/shims/server.js");
+    const raw = new Request("http://localhost/fr/dashboard?tab=settings");
+    const req = new NextRequest(raw, {
+      nextConfig: {
+        basePath: "/app",
+        i18n: { locales: ["en", "fr"], defaultLocale: "en" },
+      },
+    });
+
+    expect(req.nextUrl.href).toBe("http://localhost/app/fr/dashboard?tab=settings");
+    expect(req.url).toBe(req.nextUrl.href);
   });
 });
 

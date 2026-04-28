@@ -55,6 +55,19 @@ describe("app route handler runtime helpers", () => {
     expect(accesses).toEqual(["request.url"]);
   });
 
+  it("normalizes request.url through nextUrl for stripped internal app route requests", () => {
+    const tracked = createTrackedAppRouteRequest(
+      new Request("https://example.com/fr/demo?ping=from-url"),
+      {
+        basePath: "/base",
+        i18n: { locales: ["en", "fr"], defaultLocale: "en" },
+      },
+    );
+
+    expect(tracked.request.nextUrl.href).toBe("https://example.com/base/fr/demo?ping=from-url");
+    expect(tracked.request.url).toBe("https://example.com/base/fr/demo?ping=from-url");
+  });
+
   it("tracks dynamic nextUrl fields but not pathname", () => {
     const accesses: string[] = [];
     const tracked = createTrackedAppRouteRequest(

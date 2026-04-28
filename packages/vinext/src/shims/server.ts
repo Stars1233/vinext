@@ -58,6 +58,7 @@ function _throwIfInsideCacheScope(apiName: string): void {
 
 export class NextRequest extends Request {
   private _nextUrl: NextURL;
+  private _url: string;
   private _cookies: RequestCookies;
 
   constructor(
@@ -97,11 +98,18 @@ export class NextRequest extends Request {
       ? { basePath: _nextConfig.basePath, nextConfig: { i18n: _nextConfig.i18n } }
       : undefined;
     this._nextUrl = new NextURL(url, undefined, urlConfig);
+    this._url = process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE
+      ? url.toString()
+      : this._nextUrl.toString();
     this._cookies = new RequestCookies(this.headers);
   }
 
   get nextUrl(): NextURL {
     return this._nextUrl;
+  }
+
+  get url(): string {
+    return this._url;
   }
 
   get cookies(): RequestCookies {

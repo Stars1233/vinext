@@ -14,9 +14,9 @@ import { buildGoogleFontsUrl as buildUrlFromAxes } from "../build/google-fonts/b
  * Usage:
  *   import { Inter } from 'next/font/google';
  *   const inter = Inter({ subsets: ['latin'], weight: ['400', '700'] });
- *   // inter.className -> unique CSS class
+ *   // inter.className -> stable CSS class for this font/options pair
  *   // inter.style -> { fontFamily: "'Inter', sans-serif" }
- *   // inter.variable -> CSS variable name like '--font-inter'
+ *   // inter.variable -> CSS class that sets the font CSS variable
  */
 
 /**
@@ -77,9 +77,6 @@ function sanitizeFallback(name: string): string {
   return `'${escapeCSSString(trimmed)}'`;
 }
 
-// Counter for generating unique class names
-let classCounter = 0;
-
 // Track which font stylesheets have been injected (SSR + client)
 const injectedFonts = new Set<string>();
 
@@ -101,12 +98,92 @@ export type FontResult = {
   variable?: string;
 };
 
+type FontLoaderOptions = FontOptions & { _selfHostedCSS?: string };
+
 /**
  * Convert a font family name to a CSS variable name.
  * e.g., "Inter" -> "--font-inter", "Roboto Mono" -> "--font-roboto-mono"
  */
 function toVarName(family: string): string {
   return "--font-" + family.toLowerCase().replace(/\s+/g, "-");
+}
+
+function fontClassSegment(family: string): string {
+  const segment = family
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return segment || "font";
+}
+
+function normalizeStringSetOption(value: string | string[] | undefined): string {
+  if (!value) return "";
+  const values = Array.isArray(value) ? value : [value];
+  return [...new Set(values.map((item) => item.trim()).filter(Boolean))].sort().join(",");
+}
+
+function normalizeWeightOption(value: string | string[] | undefined): string {
+  const normalized = normalizeStringSetOption(value);
+  return normalized === "variable" ? "" : normalized;
+}
+
+function normalizeStyleOption(value: string | string[] | undefined): string {
+  const values = new Set(
+    (Array.isArray(value) ? value : value ? [value] : [])
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
+  const hasItalic = values.has("italic");
+  const hasNormal = values.has("normal");
+  if (!hasItalic) return "";
+  return hasNormal ? "italic,normal" : "italic";
+}
+
+function normalizeFallbackOption(value: string[] | undefined): string {
+  if (!value) return "";
+  return value.map((item) => item.trim()).join(",");
+}
+
+function normalizeBooleanOption(value: boolean | undefined): string {
+  if (value === undefined) return "";
+  return value ? "1" : "0";
+}
+
+function normalizeStringOrBooleanOption(value: boolean | string | undefined): string {
+  if (value === undefined) return "";
+  return typeof value === "boolean" ? normalizeBooleanOption(value) : value;
+}
+
+function hashString(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(36).padStart(7, "0");
+}
+
+function createFontIdentity(
+  family: string,
+  options: FontLoaderOptions,
+  cssVarName: string,
+  fallback: string[],
+): string {
+  return hashString(
+    [
+      family,
+      cssVarName,
+      normalizeWeightOption(options.weight),
+      normalizeStyleOption(options.style),
+      normalizeStringSetOption(options.subsets),
+      options.display ?? "swap",
+      normalizeBooleanOption(options.preload),
+      normalizeFallbackOption(fallback),
+      normalizeStringOrBooleanOption(options.adjustFontFallback),
+      normalizeStringSetOption(options.axes),
+      options._selfHostedCSS ?? "",
+    ].join("\0"),
+  );
 }
 
 /**
@@ -212,9 +289,6 @@ function injectClassNameRule(className: string, fontFamily: string): void {
 /** Track which variable class CSS rules have been injected. */
 const injectedVariableRules = new Set<string>();
 
-/** Track which :root CSS variable rules have been injected. */
-const injectedRootVariables = new Set<string>();
-
 /**
  * Inject a CSS rule that sets a CSS variable on an element.
  * This is what makes `<html className={inter.variable}>` set the CSS variable
@@ -236,15 +310,7 @@ function injectVariableClassRule(
 
   // Only set the CSS variable — do NOT set font-family.
   // This matches Next.js behavior where .variable classes only define CSS variables.
-  let css = `.${variableClassName} { ${cssVarName}: ${fontFamily}; }\n`;
-
-  // Also inject at :root so CSS variable inheritance works throughout the page.
-  // This ensures Tailwind utilities like `font-sans` that reference these
-  // variables via var(--font-geist-sans) work correctly.
-  if (!injectedRootVariables.has(cssVarName)) {
-    injectedRootVariables.add(cssVarName);
-    css += `:root { ${cssVarName}: ${fontFamily}; }\n`;
-  }
+  const css = `.${variableClassName} { ${cssVarName}: ${fontFamily}; }\n`;
 
   // On server, store the CSS for SSR injection
   if (typeof document === "undefined") {
@@ -368,12 +434,10 @@ function injectSelfHostedCSS(css: string): void {
   document.head.appendChild(style);
 }
 
-export type FontLoader = (options?: FontOptions & { _selfHostedCSS?: string }) => FontResult;
+export type FontLoader = (options?: FontLoaderOptions) => FontResult;
 
 export function createFontLoader(family: string): FontLoader {
-  return function fontLoader(options: FontOptions & { _selfHostedCSS?: string } = {}): FontResult {
-    const id = classCounter++;
-    const className = `__font_${family.toLowerCase().replace(/\s+/g, "_")}_${id}`;
+  return function fontLoader(options: FontLoaderOptions = {}): FontResult {
     const fallback = options.fallback ?? ["sans-serif"];
     // Sanitize each fallback name to prevent CSS injection via crafted values
     const fontFamily = `'${escapeCSSString(family)}', ${fallback.map(sanitizeFallback).join(", ")}`;
@@ -383,9 +447,12 @@ export function createFontLoader(family: string): FontLoader {
     const cssVarName = options.variable
       ? (sanitizeCSSVarName(options.variable) ?? defaultVarName)
       : defaultVarName;
+    const id = createFontIdentity(family, options, cssVarName, fallback);
+    const classSegment = fontClassSegment(family);
+    const className = `__font_${classSegment}_${id}`;
     // In Next.js, `variable` returns a CLASS NAME that sets the CSS variable.
     // Users apply this class to set the CSS variable on that element.
-    const variableClassName = `__variable_${family.toLowerCase().replace(/\s+/g, "_")}_${id}`;
+    const variableClassName = `__variable_${classSegment}_${id}`;
 
     if (options._selfHostedCSS) {
       // Self-hosted mode: inject local @font-face CSS instead of CDN link
@@ -422,8 +489,11 @@ export function createFontLoader(family: string): FontLoader {
 // Export a Proxy that creates font loaders for any Google Font family.
 // Usage: import { Inter } from 'next/font/google'
 // The proxy intercepts property access and returns a loader for that font.
-const googleFonts = new Proxy({} as Record<string, (options?: FontOptions) => FontResult>, {
-  get(_target, prop: string) {
+const googleFontLoaders: Record<string, FontLoader> = {};
+
+const googleFonts = new Proxy(googleFontLoaders, {
+  get(_target, prop: string | symbol) {
+    if (typeof prop !== "string") return undefined;
     if (prop === "__esModule") return true;
     if (prop === "default") return googleFonts;
     // Convert export-style names to proper font family names:

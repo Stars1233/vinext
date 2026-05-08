@@ -1459,6 +1459,21 @@ describe("next/server shim", () => {
     expect(req.cookies.has("missing")).toBe(false);
   });
 
+  it("NextRequest copies a Request body without disturbing the source request", async () => {
+    const { NextRequest } = await import("../packages/vinext/src/shims/server.js");
+    const source = new Request("https://example.com/api/echo", {
+      body: JSON.stringify({ ok: true }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    });
+
+    const req = new NextRequest(source);
+
+    await expect(req.json()).resolves.toEqual({ ok: true });
+    expect(source.bodyUsed).toBe(false);
+    await expect(source.json()).resolves.toEqual({ ok: true });
+  });
+
   it("NextResponse.json() creates a JSON response", async () => {
     const { NextResponse } = await import("../packages/vinext/src/shims/server.js");
     const res = NextResponse.json({ message: "hello" }, { status: 201 });
@@ -3914,6 +3929,37 @@ describe("double-encoded path handling in middleware", () => {
     expect(result.kind).toBe("continue");
     expect(request.body?.locked).toBe(false);
     expect(await request.text()).toBe("action-payload");
+  });
+
+  it("App Router middleware can read the body without consuming the downstream request", async () => {
+    const { applyAppMiddleware } = await import("../packages/vinext/src/server/app-middleware.js");
+    const request = new Request("http://localhost:3000/api/echo", {
+      body: JSON.stringify({ message: "hello" }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    });
+    let middlewareBody: unknown;
+    const module = {
+      default: async (req: Request) => {
+        middlewareBody = await req.json();
+        return new Response(null, {
+          headers: { "x-middleware-next": "1" },
+        });
+      },
+    };
+
+    const result = await applyAppMiddleware({
+      cleanPathname: "/api/echo",
+      context: { headers: null, requestHeaders: null, status: null },
+      isProxy: false,
+      module,
+      request,
+    });
+
+    expect(result.kind).toBe("continue");
+    expect(middlewareBody).toEqual({ message: "hello" });
+    expect(request.bodyUsed).toBe(false);
+    await expect(request.json()).resolves.toEqual({ message: "hello" });
   });
 
   it("external middleware rewrite proxy strips upstream x-middleware headers without middleware context", async () => {

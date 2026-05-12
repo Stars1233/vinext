@@ -9,6 +9,7 @@
 import { describe, it, expect } from "vite-plus/test";
 import React from "react";
 import ReactDOMServer from "react-dom/server";
+import { renderToReadableStream } from "react-dom/server.edge";
 import dynamic, { flushPreloads } from "../packages/vinext/src/shims/dynamic.js";
 
 // ─── Test components ────────────────────────────────────────────────────
@@ -21,6 +22,12 @@ function LoadingSpinner({ isLoading, error }: { isLoading?: boolean; error?: Err
   if (error) return React.createElement("div", null, `Error: ${error.message}`);
   if (isLoading) return React.createElement("div", null, "Loading...");
   return null;
+}
+
+async function renderDynamicToHtml(component: React.ComponentType) {
+  const stream = await renderToReadableStream(React.createElement(component));
+  await stream.allReady;
+  return new Response(stream).text();
 }
 
 // ─── SSR rendering ──────────────────────────────────────────────────────
@@ -45,6 +52,24 @@ describe("next/dynamic SSR", () => {
     // Some dynamic imports export the component directly
     const DynamicComponent = dynamic(() => Promise.resolve(Hello as any));
     expect(DynamicComponent.displayName).toBe("DynamicServer");
+  });
+
+  it("accepts a direct loader promise", async () => {
+    // Ported from Next.js: test/development/basic/next-dynamic/pages/dynamic/ssr.js
+    // https://github.com/vercel/next.js/blob/canary/test/development/basic/next-dynamic/pages/dynamic/ssr.js
+    const DynamicComponent = dynamic(Promise.resolve({ default: Hello }));
+
+    await expect(renderDynamicToHtml(DynamicComponent)).resolves.toContain("Hello from dynamic");
+  });
+
+  it("accepts an options object with loader", async () => {
+    // Ported from Next.js: test/development/basic/next-dynamic/pages/dynamic/head.js
+    // https://github.com/vercel/next.js/blob/canary/test/development/basic/next-dynamic/pages/dynamic/head.js
+    const DynamicComponent = dynamic({
+      loader: () => Promise.resolve({ default: Hello }),
+    });
+
+    await expect(renderDynamicToHtml(DynamicComponent)).resolves.toContain("Hello from dynamic");
   });
 });
 

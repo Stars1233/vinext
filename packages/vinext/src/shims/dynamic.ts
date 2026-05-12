@@ -13,7 +13,9 @@
  * - Client: React.lazy + Suspense (standard code splitting)
  *
  * Supports:
+ * - dynamic(import('./Component'))
  * - dynamic(() => import('./Component'))
+ * - dynamic({ loader })
  * - dynamic(() => import('./Component'), { loading: () => <Spinner /> })
  * - dynamic(() => import('./Component'), { ssr: false })
  */
@@ -27,12 +29,18 @@ type DynamicLoadingProps = {
   timedOut?: boolean;
 };
 
-type DynamicOptions = {
+type ComponentModule<P> = { default: ComponentType<P> };
+type LoaderComponent<P> = Promise<ComponentModule<P> | ComponentType<P>>;
+type LoaderFn<P> = () => LoaderComponent<P>;
+
+type DynamicOptions<P> = {
   loading?: ComponentType<DynamicLoadingProps>;
+  loader?: Loader<P>;
   ssr?: boolean;
 };
 
-type Loader<P> = () => Promise<{ default: ComponentType<P> } | ComponentType<P>>;
+type Loader<P> = LoaderFn<P> | LoaderComponent<P>;
+type DynamicInput<P> = DynamicOptions<P> | Loader<P>;
 
 const noopRetry = () => {};
 
@@ -49,16 +57,47 @@ function createDynamicLoadingProps(
   };
 }
 
-function createLazyComponent<P extends object>(loader: Loader<P>) {
+function hasDefaultExport<P>(
+  mod: ComponentModule<P> | ComponentType<P>,
+): mod is ComponentModule<P> {
+  return (typeof mod === "object" || typeof mod === "function") && mod !== null && "default" in mod;
+}
+
+function normalizeLoader<P extends object>(loader: Loader<P>): LoaderFn<P> {
+  if (typeof loader === "function") {
+    return loader;
+  }
+  return () => loader;
+}
+
+function normalizeDynamicOptions<P extends object>(
+  dynamicInput: DynamicInput<P>,
+  options?: DynamicOptions<P>,
+): DynamicOptions<P> {
+  let normalizedOptions: DynamicOptions<P>;
+
+  if (dynamicInput instanceof Promise || typeof dynamicInput === "function") {
+    normalizedOptions = { loader: normalizeLoader(dynamicInput) };
+  } else {
+    normalizedOptions = dynamicInput;
+  }
+
+  return {
+    ...normalizedOptions,
+    ...options,
+  };
+}
+
+function createLazyComponent<P extends object>(loader: LoaderFn<P>) {
   return React.lazy(async () => {
     const mod = await loader();
-    if ("default" in mod) return mod as { default: ComponentType<P> };
-    return { default: mod as ComponentType<P> };
+    if (hasDefaultExport(mod)) return mod;
+    return { default: mod };
   });
 }
 
 function useRetryableLazyComponent<P extends object>(
-  loader: Loader<P>,
+  loader: LoaderFn<P>,
   initialLazyComponent: ReturnType<typeof createLazyComponent<P>>,
 ) {
   const [LazyComponent, setLazyComponent] = React.useState(() => initialLazyComponent);
@@ -150,10 +189,15 @@ export function flushPreloads(): Promise<void[]> {
 }
 
 function dynamic<P extends object = object>(
-  loader: Loader<P>,
-  options?: DynamicOptions,
+  dynamicInput: DynamicInput<P>,
+  options?: DynamicOptions<P>,
 ): ComponentType<P> {
-  const { loading: LoadingComponent, ssr = true } = options ?? {};
+  const {
+    loader: dynamicLoader,
+    loading: LoadingComponent,
+    ssr = true,
+  } = normalizeDynamicOptions(dynamicInput, options);
+  const loader = dynamicLoader ? normalizeLoader(dynamicLoader) : () => Promise.resolve(() => null);
 
   // ssr: false — render nothing on the server, lazy-load on client
   if (!ssr) {

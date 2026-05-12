@@ -1,6 +1,7 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createOnUncaughtError } from "../packages/vinext/src/server/app-browser-error.js";
+import { shouldClearClientNavigationCachesForServerActionResult } from "../packages/vinext/src/server/app-browser-action-result.js";
 import {
   RSC_FORM_STATE_GLOBAL,
   consumeInitialFormState,
@@ -231,6 +232,25 @@ afterEach(() => {
 });
 
 describe("app browser entry navigation scheduling", () => {
+  it("keeps client navigation caches for no-root server action results", () => {
+    expect(
+      shouldClearClientNavigationCachesForServerActionResult({
+        returnValue: { ok: true, data: "action-result" },
+      }),
+    ).toBe(false);
+    expect(
+      shouldClearClientNavigationCachesForServerActionResult({
+        root: createResolvedElements("route:/settings", "/"),
+        returnValue: { ok: true, data: "action-result" },
+      }),
+    ).toBe(true);
+    expect(
+      shouldClearClientNavigationCachesForServerActionResult(
+        createResolvedElements("route:/settings", "/"),
+      ),
+    ).toBe(true);
+  });
+
   it("does not expose a per-navigation transition override at the controller boundary", () => {
     type Controller = ReturnType<typeof createAppBrowserNavigationController>;
     function assertNoTransitionOverride(controller: Controller) {

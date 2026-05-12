@@ -28,7 +28,7 @@ type TestTemporaryReferences = {
 
 type TestActionModel = {
   returnValue: unknown;
-  root: string;
+  root?: string;
 };
 
 function createMultipartRequest(headers?: HeadersInit): Request {
@@ -638,6 +638,32 @@ describe("app server action execution helpers", () => {
     expect(navigationContexts).toEqual([{ params: {}, pathname: "/dashboard" }]);
   });
 
+  it("skips page rerendering for fetch actions that do not revalidate", async () => {
+    const buildPageElement = vi.fn(() => "dashboard:{}:none");
+    const setNavigationContext = vi.fn();
+    const renderToReadableStream = vi.fn(
+      (model: TestActionModel) => new Response(JSON.stringify(model)).body,
+    );
+
+    const response = await handleServerActionRscRequest(
+      createRscOptions({
+        buildPageElement,
+        renderToReadableStream,
+        setNavigationContext,
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(response?.headers.get("content-type")).toBe("text/x-component; charset=utf-8");
+    expect(response?.headers.get("x-action-revalidated")).toBeNull();
+    expect(buildPageElement).not.toHaveBeenCalled();
+    expect(setNavigationContext).not.toHaveBeenCalled();
+
+    const model = JSON.parse(await response!.text()) as Partial<TestActionModel>;
+    expect(model.returnValue).toEqual({ ok: true, data: "action-result" });
+    expect(model).not.toHaveProperty("root");
+  });
+
   // Mirrors Next.js' action revalidation header contract:
   // packages/next/src/server/app-render/action-handler.ts addRevalidationHeader()
   // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/app-render/action-handler.ts
@@ -735,7 +761,6 @@ describe("app server action execution helpers", () => {
       expect(await response?.text()).toBe("too-many-args-flight");
       expect(action).not.toHaveBeenCalled();
       expect(renderedModel).toEqual({
-        root: "dashboard:{}:none",
         returnValue: {
           ok: false,
           data: "Server Action arguments list is too long (1001). Maximum allowed is 1000.",
@@ -910,7 +935,6 @@ describe("app server action execution helpers", () => {
       expect(response?.status).toBe(statusCode);
       expect(await response?.text()).toBe("fallback-flight");
       expect(renderedModel).toEqual({
-        root: "dashboard:{}:none",
         returnValue: { ok: false, data: fallbackError },
       });
     }

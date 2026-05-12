@@ -18,6 +18,11 @@ import {
   type AppRenderDependency,
 } from "./app-render-dependency.js";
 import { resolveAppPageSegmentParams } from "./app-page-params.js";
+import {
+  APP_RSC_RENDER_MODE_NAVIGATION,
+  shouldSuppressLoadingBoundaries,
+  type AppRscRenderMode,
+} from "./app-rsc-render-mode.js";
 
 type AppPageComponentProps = {
   children?: ReactNode;
@@ -140,6 +145,7 @@ type BuildAppPageElementsOptions<
   interceptionContext?: string | null;
   isRscRequest?: boolean;
   mountedSlotIds?: ReadonlySet<string> | null;
+  renderMode?: AppRscRenderMode;
   routePath: string;
 };
 
@@ -588,7 +594,10 @@ export function buildAppPageElements<
     }
 
     const slotLoadingComponent = getDefaultExport(slot.loading);
-    if (slotLoadingComponent) {
+    if (
+      slotLoadingComponent &&
+      !shouldSuppressLoadingBoundaries(options.renderMode ?? APP_RSC_RENDER_MODE_NAVIGATION)
+    ) {
       const SlotLoadingComponent = slotLoadingComponent;
       slotElement = <Suspense fallback={<SlotLoadingComponent />}>{slotElement}</Suspense>;
     }
@@ -611,7 +620,10 @@ export function buildAppPageElements<
   );
 
   const routeLoadingComponent = getDefaultExport(options.route.loading);
-  if (routeLoadingComponent) {
+  if (
+    routeLoadingComponent &&
+    !shouldSuppressLoadingBoundaries(options.renderMode ?? APP_RSC_RENDER_MODE_NAVIGATION)
+  ) {
     const RouteLoadingComponent = routeLoadingComponent;
     routeChildren = <Suspense fallback={<RouteLoadingComponent />}>{routeChildren}</Suspense>;
   }

@@ -41,6 +41,7 @@ import { handleMetadataRouteRequest } from "./metadata-route-response.js";
 import type { MiddlewareModule } from "./middleware-runtime.js";
 import { runWithPrerenderWorkUnit } from "./prerender-work-unit-setup.js";
 import { buildPostMwRequestContext } from "./app-post-middleware-context.js";
+import type { AppRscRenderMode } from "./app-rsc-render-mode.js";
 import {
   cloneRequestWithHeaders,
   filterInternalHeaders,
@@ -89,6 +90,7 @@ type DispatchMatchedPageOptions<TRoute> = {
   route: TRoute;
   scriptNonce?: string;
   searchParams: URLSearchParams;
+  renderMode: AppRscRenderMode;
 };
 
 type DispatchMatchedRouteHandlerOptions<TRoute> = {
@@ -269,7 +271,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   const normalized = normalizeRscRequest(request, options.basePath);
   if (normalized instanceof Response) return normalized;
 
-  const { url, isRscRequest, interceptionContextHeader, mountedSlotsHeader } = normalized;
+  const { url, isRscRequest, interceptionContextHeader, mountedSlotsHeader, renderMode } =
+    normalized;
   let { pathname, cleanPathname } = normalized;
 
   const prerenderEndpointResponse = await handleAppPrerenderEndpoint(request, {
@@ -522,6 +525,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     route,
     scriptNonce,
     searchParams: url.searchParams,
+    renderMode,
   });
 }
 

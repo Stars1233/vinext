@@ -14,6 +14,7 @@ import { AppElementsWire, type AppElements } from "./app-elements.js";
 import type { AppPageParams } from "./app-page-boundary.js";
 import { matchRoutePattern } from "../routing/route-pattern.js";
 import type { MetadataFileRoute } from "./metadata-routes.js";
+import { APP_RSC_RENDER_MODE_NAVIGATION, type AppRscRenderMode } from "./app-rsc-render-mode.js";
 
 export type { AppPageErrorModule, AppPageRouteWiringRoute } from "./app-page-route-wiring.js";
 
@@ -51,6 +52,8 @@ export type AppPagePageRequest<TModule extends AppPageModule = AppPageModule> = 
   request: Request;
   /** Normalized x-vinext-mounted-slots header value. */
   mountedSlotsHeader: string | null;
+  /** Semantic RSC payload mode for this page render. */
+  renderMode?: AppRscRenderMode;
 };
 
 export type BuildPageElementsOptions<
@@ -104,7 +107,13 @@ export async function buildPageElements<
     rootUnauthorizedModule,
     metadataRoutes,
   } = options;
-  const { opts, searchParams, isRscRequest, mountedSlotsHeader } = pageRequest;
+  const {
+    opts,
+    searchParams,
+    isRscRequest,
+    mountedSlotsHeader,
+    renderMode = APP_RSC_RENDER_MODE_NAVIGATION,
+  } = pageRequest;
 
   const pageModule: AppPageModule | null | undefined = route.page;
   const PageComponent = pageModule?.default;
@@ -187,6 +196,7 @@ export async function buildPageElements<
     rootUnauthorizedModule: rootUnauthorizedModule ?? null,
     route,
     slotOverrides,
+    renderMode,
   });
 }
 

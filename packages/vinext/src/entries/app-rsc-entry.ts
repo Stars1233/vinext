@@ -460,6 +460,7 @@ export default __createAppRscHandler({
     route,
     scriptNonce,
     searchParams,
+    renderMode,
   }) {
     const PageComponent = route.page?.default;
     const __segmentConfig = __resolveAppPageSegmentConfig({
@@ -482,6 +483,7 @@ export default __createAppRscHandler({
           isRscRequest,
           request,
           mountedSlotsHeader,
+          renderMode,
         });
       },
       cleanPathname,
@@ -571,6 +573,7 @@ export default __createAppRscHandler({
       scriptNonce,
       searchParams,
       setNavigationContext,
+      renderMode,
     });
   },
   dispatchMatchedRouteHandler({
@@ -662,6 +665,7 @@ export default __createAppRscHandler({
         isRscRequest: actionIsRscRequest,
         request: actionRequest,
         mountedSlotsHeader: actionMountedSlotsHeader,
+        renderMode: actionRenderMode,
       }) {
         return buildPageElements(actionRoute, actionParams, actionCleanPathname, {
           opts: interceptOpts,
@@ -669,6 +673,7 @@ export default __createAppRscHandler({
           isRscRequest: actionIsRscRequest,
           request: actionRequest,
           mountedSlotsHeader: actionMountedSlotsHeader,
+          renderMode: actionRenderMode,
         });
       },
       cleanPathname,

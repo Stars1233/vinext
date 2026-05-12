@@ -6,6 +6,10 @@ import { VINEXT_RSC_VARY_HEADER } from "./app-rsc-cache-busting.js";
 import { resolveAppPageActionRerenderTarget } from "./app-page-request.js";
 import { mergeMiddlewareResponseHeaders } from "./middleware-response-headers.js";
 import {
+  APP_RSC_RENDER_MODE_ACTION_RERENDER_PRESERVE_UI,
+  type AppRscRenderMode,
+} from "./app-rsc-render-mode.js";
+import {
   getNextErrorDigest,
   parseNextHttpErrorDigest,
   parseNextRedirectDigest,
@@ -85,11 +89,17 @@ type BuildServerActionPageElementOptions<TRoute extends AppServerActionRoute, TI
   request: Request;
   route: TRoute;
   searchParams: URLSearchParams;
+  renderMode: AppRscRenderMode;
 };
 
 type AppServerActionRscModel<TElement> = {
+  /**
+   * Omitted when the action did not invalidate page data. This mirrors Next.js'
+   * empty Flight payload for non-revalidating fetch actions: the client resolves
+   * the action value without committing a visible router update.
+   */
+  root?: TElement;
   returnValue: AppServerActionReturnValue;
-  root: TElement;
 };
 
 type RenderServerActionRscStreamOptions<TTemporaryReferences> = {
@@ -627,6 +637,38 @@ export async function handleServerActionRscRequest<
       return new Response("", { status: 200, headers: redirectHeaders });
     }
 
+    const actionPendingCookies = options.getAndClearPendingCookies();
+    const actionDraftCookie = options.getDraftModeCookieHeader();
+    const actionRevalidationKind = resolveActionRevalidationKind(
+      actionPendingCookies.length > 0 || Boolean(actionDraftCookie),
+    );
+
+    const shouldSkipPageRendering = actionRevalidationKind === ACTION_DID_NOT_REVALIDATE;
+    if (shouldSkipPageRendering) {
+      const onRenderError = options.createRscOnErrorHandler(
+        options.request,
+        options.cleanPathname,
+        options.cleanPathname,
+      );
+      const rscStream = await options.renderToReadableStream(
+        { returnValue },
+        { temporaryReferences, onError: onRenderError },
+      );
+
+      options.clearRequestContext();
+
+      const actionHeaders = new Headers({
+        "Content-Type": "text/x-component; charset=utf-8",
+        Vary: VINEXT_RSC_VARY_HEADER,
+      });
+      mergeMiddlewareResponseHeaders(actionHeaders, options.middlewareHeaders);
+
+      return new Response(rscStream, {
+        status: options.middlewareStatus ?? actionStatus,
+        headers: actionHeaders,
+      });
+    }
+
     const match = options.matchRoute(options.cleanPathname);
     let element: TElement;
     let errorPattern = match ? match.route.pattern : options.cleanPathname;
@@ -660,6 +702,7 @@ export async function handleServerActionRscRequest<
         request: options.request,
         route: actionRerenderTarget.route,
         searchParams: options.searchParams,
+        renderMode: APP_RSC_RENDER_MODE_ACTION_RERENDER_PRESERVE_UI,
       });
       errorPattern = actionRerenderTarget.route.pattern;
     } else {
@@ -675,12 +718,6 @@ export async function handleServerActionRscRequest<
     const rscStream = await options.renderToReadableStream(
       { root: element, returnValue },
       { temporaryReferences, onError: onRenderError },
-    );
-
-    const actionPendingCookies = options.getAndClearPendingCookies();
-    const actionDraftCookie = options.getDraftModeCookieHeader();
-    const actionRevalidationKind = resolveActionRevalidationKind(
-      actionPendingCookies.length > 0 || Boolean(actionDraftCookie),
     );
 
     const actionHeaders = new Headers({

@@ -8190,16 +8190,14 @@ describe("next/form shim", () => {
 });
 
 describe("next/font/google shim", () => {
-  it("returns className, style, and variable for a Google Font", async () => {
+  it("returns className and style without variable unless requested for a Google Font", async () => {
     const { createFontLoader } = await import("../packages/vinext/src/shims/font-google.js");
     const Inter = createFontLoader("Inter");
     const result = Inter({ subsets: ["latin"], weight: ["400", "700"] });
 
     expect(result.className).toMatch(/^__font_inter_/);
     expect(result.style.fontFamily).toContain("Inter");
-    // In Next.js, `variable` returns a CLASS NAME that sets the CSS variable.
-    // Users apply this class to set the CSS variable on that element.
-    expect(result.variable).toMatch(/^__variable_inter_/);
+    expect(result.variable).toBeUndefined();
   });
 
   it("Proxy returns font loaders for any family", async () => {
@@ -8219,8 +8217,7 @@ describe("next/font/google shim", () => {
     const result = googleFonts.RobotoMono({ weight: "400" });
 
     expect(result.style.fontFamily).toContain("Roboto Mono");
-    // In Next.js, `variable` returns a CLASS NAME that sets the CSS variable.
-    expect(result.variable).toMatch(/^__variable_roboto_mono_/);
+    expect(result.variable).toBeUndefined();
   });
 
   it("uses custom variable name when provided", async () => {

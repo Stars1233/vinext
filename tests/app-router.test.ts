@@ -2802,7 +2802,7 @@ describe("App Router Production server self-hosted next/font/google headers", ()
   // downloaded Google Fonts `.woff2` files into `<root>/.vinext/fonts/`
   // and wrote `path.join(fontDir, filename)` — an absolute filesystem
   // path — into the cached `@font-face` CSS's `src: url(...)`. The CSS
-  // was then embedded verbatim as `_selfHostedCSS` in the server bundle
+  // was then embedded verbatim as `selfHostedCSS` in the server bundle
   // and every downstream consumer (the body preload tags, the Link
   // response header, and the injected style block) read the same
   // leaked filesystem path. In production this produced high-priority

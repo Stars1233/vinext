@@ -471,7 +471,7 @@ declare module "next/font/google" {
 
   type FontResult = {
     className: string;
-    style: { fontFamily: string };
+    style: { fontFamily: string; fontWeight?: number; fontStyle?: string };
     variable?: string;
   };
 
@@ -502,7 +502,7 @@ declare module "next/font/local" {
 
   type FontResult = {
     className: string;
-    style: { fontFamily: string };
+    style: { fontFamily: string; fontWeight?: number; fontStyle?: string };
     variable?: string;
   };
 

@@ -1,4 +1,12 @@
 import { buildGoogleFontsUrl as buildUrlFromAxes } from "../build/google-fonts/build-url.js";
+import {
+  escapeCSSString,
+  formatFontClassRule,
+  resolveSingleFaceStyle,
+  sanitizeCSSVarName,
+  sanitizeFallback,
+  type FontStyle,
+} from "./font-utils.js";
 
 /**
  * next/font/google shim
@@ -15,67 +23,9 @@ import { buildGoogleFontsUrl as buildUrlFromAxes } from "../build/google-fonts/b
  *   import { Inter } from 'next/font/google';
  *   const inter = Inter({ subsets: ['latin'], weight: ['400', '700'] });
  *   // inter.className -> stable CSS class for this font/options pair
- *   // inter.style -> { fontFamily: "'Inter', sans-serif" }
- *   // inter.variable -> CSS class that sets the font CSS variable
+ *   // inter.style -> { fontFamily: "'Inter', 'Inter Fallback'", fontStyle: "normal" }
+ *   // inter.variable -> CSS class that sets the font CSS variable when requested
  */
-
-/**
- * Escape a string for safe interpolation inside a CSS single-quoted string.
- *
- * Prevents CSS injection by escaping characters that could break out of
- * a `'...'` CSS string context: backslashes, single quotes, and newlines.
- */
-function escapeCSSString(value: string): string {
-  return value
-    .replace(/\\/g, "\\\\")
-    .replace(/'/g, "\\'")
-    .replace(/\n/g, "\\a ")
-    .replace(/\r/g, "\\d ");
-}
-
-/**
- * Validate a CSS custom property name (e.g. `--font-inter`).
- *
- * Custom properties must start with `--` and only contain alphanumeric
- * characters, hyphens, and underscores. Anything else could be used to
- * break out of the CSS declaration and inject arbitrary rules.
- *
- * Returns the name if valid, undefined otherwise.
- */
-function sanitizeCSSVarName(name: string): string | undefined {
-  if (/^--[a-zA-Z0-9_-]+$/.test(name)) return name;
-  return undefined;
-}
-
-/**
- * Sanitize a CSS font-family fallback name.
- *
- * Generic family names (sans-serif, serif, monospace, etc.) are used as-is.
- * Named families are wrapped in escaped quotes. This prevents injection via
- * crafted fallback values like `); } body { color: red; } .x {`.
- */
-function sanitizeFallback(name: string): string {
-  // CSS generic font families — safe to use unquoted
-  const generics = new Set([
-    "serif",
-    "sans-serif",
-    "monospace",
-    "cursive",
-    "fantasy",
-    "system-ui",
-    "ui-serif",
-    "ui-sans-serif",
-    "ui-monospace",
-    "ui-rounded",
-    "emoji",
-    "math",
-    "fangsong",
-  ]);
-  const trimmed = name.trim();
-  if (generics.has(trimmed)) return trimmed;
-  // Wrap in single quotes with escaping to prevent CSS injection
-  return `'${escapeCSSString(trimmed)}'`;
-}
 
 // Track which font stylesheets have been injected (SSR + client)
 const injectedFonts = new Set<string>();
@@ -94,11 +44,28 @@ export type FontOptions = {
 
 export type FontResult = {
   className: string;
-  style: { fontFamily: string };
+  style: FontStyle;
   variable?: string;
 };
 
-type FontLoaderOptions = FontOptions & { _selfHostedCSS?: string };
+type InternalGoogleFontRuntimeOptions = {
+  selfHostedCSS?: string;
+  adjustedFallbackCSS?: string;
+  fontWeight?: number;
+  fontStyle?: "normal" | "italic";
+};
+
+type FontLoaderOptions = FontOptions & {
+  /**
+   * Internal payload injected by the vinext:google-fonts transform after
+   * metadata validation. Runtime must prefer these values over user options
+   * because they represent the resolved Next-compatible face, including
+   * metadata defaults such as italic-only families.
+   */
+  _vinext?: {
+    font?: InternalGoogleFontRuntimeOptions;
+  };
+};
 
 /**
  * Convert a font family name to a CSS variable name.
@@ -181,7 +148,9 @@ function createFontIdentity(
       normalizeFallbackOption(fallback),
       normalizeStringOrBooleanOption(options.adjustFontFallback),
       normalizeStringSetOption(options.axes),
-      options._selfHostedCSS ?? "",
+      options._vinext?.font?.selfHostedCSS ?? "",
+      options._vinext?.font?.fontWeight?.toString() ?? "",
+      options._vinext?.font?.fontStyle ?? "",
     ].join("\0"),
   );
 }
@@ -192,10 +161,10 @@ function createFontIdentity(
  * In production this code path is dead. The build plugin
  * (`vinext:google-fonts` in `src/plugins/fonts.ts`) statically resolves
  * each font call's axis values against the bundled metadata, fetches the
- * Google Fonts CSS, and injects the resulting CSS as `_selfHostedCSS` so
- * the runtime never queries Google. The shim only reaches this builder
- * when the plugin's static parser bails (dynamic options, eval-only
- * shapes), which is dev-only.
+ * Google Fonts CSS, and injects the resulting CSS as
+ * `_vinext.font.selfHostedCSS` so the runtime never queries Google. The shim
+ * only reaches this builder when the plugin's static parser bails (dynamic
+ * options, eval-only shapes), which is dev-only.
  *
  * The dev fallback intentionally has no metadata: shipping the 388 KB
  * `font-data.json` to the Worker bundle would dwarf the rest of the shim,
@@ -259,19 +228,19 @@ function injectFontStylesheet(url: string): void {
 const injectedClassRules = new Set<string>();
 
 /**
- * Inject a CSS rule that maps a className to a font-family.
+ * Inject a CSS rule that maps a className to the exported font style.
  *
  * This is what makes `<div className={inter.className}>` apply the font.
  * Next.js generates equivalent rules at build time.
  *
- * In Next.js, the .className class ONLY sets font-family — it does NOT
- * set CSS variables. CSS variables are handled separately by the .variable class.
+ * In Next.js, the .className class sets font-family and any single
+ * font-weight/font-style. CSS variables are handled separately by .variable.
  */
-function injectClassNameRule(className: string, fontFamily: string): void {
+function injectClassNameRule(className: string, fontStyle: FontStyle): void {
   if (injectedClassRules.has(className)) return;
   injectedClassRules.add(className);
 
-  const css = `.${className} { font-family: ${fontFamily}; }\n`;
+  const css = formatFontClassRule(className, fontStyle);
 
   // On server, store the CSS for SSR injection
   if (typeof document === "undefined") {
@@ -280,10 +249,10 @@ function injectClassNameRule(className: string, fontFamily: string): void {
   }
 
   // On client, inject a <style> tag
-  const style = document.createElement("style");
-  style.textContent = css;
-  style.setAttribute("data-vinext-font-class", className);
-  document.head.appendChild(style);
+  const styleElement = document.createElement("style");
+  styleElement.textContent = css;
+  styleElement.setAttribute("data-vinext-font-class", className);
+  document.head.appendChild(styleElement);
 }
 
 /** Track which variable class CSS rules have been injected. */
@@ -438,9 +407,21 @@ export type FontLoader = (options?: FontLoaderOptions) => FontResult;
 
 export function createFontLoader(family: string): FontLoader {
   return function fontLoader(options: FontLoaderOptions = {}): FontResult {
-    const fallback = options.fallback ?? ["sans-serif"];
+    const internal = options._vinext?.font;
+    const fallback = options.fallback ?? [];
+    // The adjusted fallback family name must match the font-family emitted by
+    // buildFallbackFontFace() in build/google-fonts/fallback-metrics.ts ('{family} Fallback').
+    // Keep these two sites in sync to prevent silent fallback mismatches.
+    const adjustedFallback =
+      options.adjustFontFallback === false || !internal?.adjustedFallbackCSS
+        ? []
+        : [`'${escapeCSSString(family)} Fallback'`];
     // Sanitize each fallback name to prevent CSS injection via crafted values
-    const fontFamily = `'${escapeCSSString(family)}', ${fallback.map(sanitizeFallback).join(", ")}`;
+    const fontFamily = [
+      `'${escapeCSSString(family)}'`,
+      ...adjustedFallback,
+      ...fallback.map(sanitizeFallback),
+    ].join(", ");
     // Validate CSS variable name — reject anything that could inject CSS.
     // Fall back to auto-generated name if invalid.
     const defaultVarName = toVarName(family);
@@ -453,10 +434,18 @@ export function createFontLoader(family: string): FontLoader {
     // In Next.js, `variable` returns a CLASS NAME that sets the CSS variable.
     // Users apply this class to set the CSS variable on that element.
     const variableClassName = `__variable_${classSegment}_${id}`;
+    const style = resolveSingleFaceStyle({
+      fontFamily,
+      weight: options.weight,
+      style: options.style,
+      internalWeight: internal?.fontWeight,
+      internalStyle: internal?.fontStyle,
+      google: true,
+    });
 
-    if (options._selfHostedCSS) {
+    if (internal?.selfHostedCSS) {
       // Self-hosted mode: inject local @font-face CSS instead of CDN link
-      injectSelfHostedCSS(options._selfHostedCSS);
+      injectSelfHostedCSS(internal.selfHostedCSS);
     } else {
       // CDN mode: inject <link> to Google Fonts
       const url = buildGoogleFontsUrl(family, options);
@@ -470,18 +459,24 @@ export function createFontLoader(family: string): FontLoader {
       }
     }
 
+    if (options.adjustFontFallback !== false && internal?.adjustedFallbackCSS) {
+      injectSelfHostedCSS(internal.adjustedFallbackCSS);
+    }
+
     // Inject a CSS rule that maps className to font-family.
     // This is what makes `<div className={inter.className}>` work.
-    injectClassNameRule(className, fontFamily);
+    injectClassNameRule(className, style);
 
-    // Inject a CSS rule for the variable class name.
-    // This is what makes `<html className={inter.variable}>` set the CSS variable.
-    injectVariableClassRule(variableClassName, cssVarName, fontFamily);
+    if (options.variable) {
+      // Inject a CSS rule for the variable class name.
+      // This is what makes `<html className={inter.variable}>` set the CSS variable.
+      injectVariableClassRule(variableClassName, cssVarName, fontFamily);
+    }
 
     return {
       className,
-      style: { fontFamily },
-      variable: variableClassName,
+      style,
+      ...(options.variable ? { variable: variableClassName } : {}),
     };
   };
 }

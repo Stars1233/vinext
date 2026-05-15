@@ -194,6 +194,15 @@ export type RenderRequestApiKind =
   | "searchParams";
 export type RenderRequestApiStatus = "notObserved" | "observed" | "unknown";
 
+export const ALL_RENDER_REQUEST_API_KINDS: readonly RenderRequestApiKind[] = [
+  "connection",
+  "cookies",
+  "draftMode",
+  "headers",
+  "params",
+  "searchParams",
+];
+
 export type RenderRequestApiObservation = Readonly<{
   kind: RenderRequestApiKind;
   status: RenderRequestApiStatus;
@@ -220,6 +229,11 @@ export type BuildRenderObservationInput = Readonly<{
   output: CacheProofOutputScope;
   pathTags: readonly string[];
   requestApis: readonly RenderRequestApiObservation[];
+}>;
+
+export type BuildRenderRequestApiObservationsInput = Readonly<{
+  completeness: RenderObservationCompleteness;
+  observed: readonly RenderRequestApiKind[];
 }>;
 
 export type DisabledCacheProofDecision = Readonly<{
@@ -681,6 +695,19 @@ function normalizeRequestApiObservations(
   return [...byKind.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([kind, status]) => ({ kind, status }));
+}
+
+export function buildRenderRequestApiObservations(
+  input: BuildRenderRequestApiObservationsInput,
+): RenderRequestApiObservation[] {
+  const observedKinds = new Set(input.observed);
+  const absentStatus: RenderRequestApiStatus =
+    input.completeness === "complete" ? "notObserved" : "unknown";
+
+  return ALL_RENDER_REQUEST_API_KINDS.map((kind) => ({
+    kind,
+    status: observedKinds.has(kind) ? "observed" : absentStatus,
+  }));
 }
 
 export function buildRenderObservation(input: BuildRenderObservationInput): RenderObservation {

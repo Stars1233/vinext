@@ -1,5 +1,5 @@
 import { createElement } from "react";
-import { markDynamicUsage } from "vinext/shims/headers";
+import { markDynamicUsage, markRenderRequestApiUsage } from "vinext/shims/headers";
 import { makeThenableParams } from "vinext/shims/thenable-params";
 import { resolveActiveParallelRouteHeadInputs, resolveAppPageHead } from "./app-page-head.js";
 import {
@@ -173,7 +173,10 @@ export async function buildPageElements<
   const pageProps: Record<string, unknown> = { params: makeThenableParams(params) };
   if (searchParams) {
     pageProps.searchParams = makeThenableParams(pageSearchParams);
-    if (hasSearchParams) markDynamicUsage();
+    if (hasSearchParams) {
+      markDynamicUsage();
+      markRenderRequestApiUsage("searchParams");
+    }
   }
 
   const mountedSlotIds = mountedSlotsHeader ? new Set(mountedSlotsHeader.split(" ")) : null;

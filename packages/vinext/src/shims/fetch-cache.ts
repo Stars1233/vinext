@@ -477,6 +477,7 @@ export type FetchCacheState = {
   currentRequestTags: string[];
   currentFetchSoftTags: string[];
   currentFetchCacheMode: FetchCacheMode | null;
+  dynamicFetchUrls: Set<string>;
   isFetchDedupeActive: boolean;
   currentFetchDedupeEntries: Map<string, FetchDedupeEntry[]>;
 };
@@ -510,6 +511,7 @@ const _fallbackState = (_g[_FALLBACK_KEY] ??= {
   currentRequestTags: [],
   currentFetchSoftTags: [],
   currentFetchCacheMode: null,
+  dynamicFetchUrls: new Set<string>(),
   isFetchDedupeActive: false,
   currentFetchDedupeEntries: new Map(),
 } satisfies FetchCacheState) as FetchCacheState;
@@ -529,8 +531,28 @@ function _resetFallbackState(isFetchDedupeActive: boolean): void {
   _fallbackState.currentRequestTags = [];
   _fallbackState.currentFetchSoftTags = [];
   _fallbackState.currentFetchCacheMode = null;
+  _fallbackState.dynamicFetchUrls = new Set<string>();
   _fallbackState.isFetchDedupeActive = isFetchDedupeActive;
   _fallbackState.currentFetchDedupeEntries = new Map();
+}
+
+function getFetchObservationUrl(input: string | URL | Request): string {
+  return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+}
+
+function recordDynamicFetchObservation(input: string | URL | Request): void {
+  _getState().dynamicFetchUrls.add(getFetchObservationUrl(input));
+}
+
+export function peekDynamicFetchObservations(): string[] {
+  return [..._getState().dynamicFetchUrls].sort();
+}
+
+export function consumeDynamicFetchObservations(): string[] {
+  const state = _getState();
+  const observed = [...state.dynamicFetchUrls].sort();
+  state.dynamicFetchUrls = new Set<string>();
+  return observed;
 }
 
 /**
@@ -816,6 +838,7 @@ function createPatchedFetch(): typeof globalThis.fetch {
 
     // If no caching options at all, just pass through to original fetch
     if (!nextOpts && !cacheDirective) {
+      recordDynamicFetchObservation(input);
       return dedupeFetch(input, init);
     }
 
@@ -828,6 +851,7 @@ function createPatchedFetch(): typeof globalThis.fetch {
     ) {
       // Strip the `next` property before passing to real fetch
       const cleanInit = stripNextFromInit(init, cacheDirective);
+      recordDynamicFetchObservation(input);
       return dedupeFetch(input, cleanInit);
     }
 
@@ -841,6 +865,7 @@ function createPatchedFetch(): typeof globalThis.fetch {
       (typeof nextOpts?.revalidate === "number" && nextOpts.revalidate > 0);
     if (!hasExplicitCacheOpt && hasAuthHeaders(input, init)) {
       const cleanInit = stripNextFromInit(init, cacheDirective);
+      recordDynamicFetchObservation(input);
       return dedupeFetch(input, cleanInit);
     }
 
@@ -863,6 +888,7 @@ function createPatchedFetch(): typeof globalThis.fetch {
       } else {
         // next: {} with no revalidate or tags — pass through
         const cleanInit = stripNextFromInit(init, cacheDirective);
+        recordDynamicFetchObservation(input);
         return dedupeFetch(input, cleanInit);
       }
     }
@@ -882,6 +908,7 @@ function createPatchedFetch(): typeof globalThis.fetch {
         err instanceof SkipCacheKeyGenerationError
       ) {
         fetchInit = stripNextFromInit(fetchInit, cacheDirective);
+        recordDynamicFetchObservation(input);
         return dedupeFetch(input, fetchInit);
       }
       throw err;
@@ -1120,6 +1147,7 @@ export async function runWithFetchCache<T>(fn: () => Promise<T>): Promise<T> {
     return await runWithUnifiedStateMutation((uCtx) => {
       uCtx.currentRequestTags = [];
       uCtx.currentFetchSoftTags = [];
+      uCtx.dynamicFetchUrls = new Set<string>();
       uCtx.isFetchDedupeActive = true;
       uCtx.currentFetchDedupeEntries = new Map();
     }, fn);
@@ -1129,6 +1157,7 @@ export async function runWithFetchCache<T>(fn: () => Promise<T>): Promise<T> {
       currentRequestTags: [],
       currentFetchSoftTags: [],
       currentFetchCacheMode: null,
+      dynamicFetchUrls: new Set<string>(),
       isFetchDedupeActive: true,
       currentFetchDedupeEntries: new Map(),
     },

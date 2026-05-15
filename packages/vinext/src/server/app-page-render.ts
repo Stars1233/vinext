@@ -40,6 +40,13 @@ import {
   createArtifactCompatibilityGraphVersion,
   type ArtifactCompatibilityEnvelope,
 } from "./artifact-compatibility.js";
+import {
+  createAppPageHtmlOutputScope,
+  createAppPageRenderObservation,
+  createAppPageRscOutputScope,
+  createEmptyAppPageRenderObservationState,
+  type AppPageRenderObservationState,
+} from "./app-page-render-observation.js";
 
 type AppPageBoundaryOnError = (
   error: unknown,
@@ -64,6 +71,7 @@ type RenderAppPageLifecycleOptions = {
   cleanPathname: string;
   clearRequestContext: () => void;
   consumeDynamicUsage: () => boolean;
+  consumeRenderObservationState?: () => AppPageRenderObservationState;
   /** Read and clear any invalid dynamic usage error recorded during render (dev-only). */
   consumeInvalidDynamicUsageError?: () => unknown;
   createRscOnErrorHandler: (pathname: string, routePath: string) => AppPageBoundaryOnError;
@@ -97,6 +105,7 @@ type RenderAppPageLifecycleOptions = {
   loadSsrHandler: () => Promise<AppPageSsrHandler>;
   middlewareContext: AppPageMiddlewareContext;
   params: Record<string, unknown>;
+  peekRenderObservationState?: () => AppPageRenderObservationState;
   probeLayoutAt: (layoutIndex: number) => unknown;
   probePage: () => unknown;
   expireSeconds?: number;
@@ -298,10 +307,39 @@ export async function renderAppPageLifecycle(
     options.element,
     options.routePattern,
   );
+  const rootBoundaryId = artifactCompatibility?.rootBoundaryId ?? null;
+  const renderEpoch = artifactCompatibility?.renderEpoch ?? null;
+  const rscOutputScope = createAppPageRscOutputScope({
+    element: options.element,
+    mountedSlotsHeader: options.mountedSlotsHeader,
+    renderEpoch,
+    rootBoundaryId,
+    routePattern: options.routePattern,
+  });
+  const htmlOutputScope = createAppPageHtmlOutputScope({
+    element: options.element,
+    renderEpoch,
+    rootBoundaryId,
+    routePattern: options.routePattern,
+  });
+  // Partial payload metadata is a pre-stream snapshot. Fetch tags may still
+  // accumulate while the RSC/HTML streams are consumed; complete cache artifact
+  // observations below rebuild this field after the stream drains.
+  const payloadRenderObservation = createAppPageRenderObservation({
+    boundaryOutcome: { kind: "unknown" },
+    cacheability: "unknown",
+    cacheTags: options.getPageTags(),
+    cleanPathname: options.cleanPathname,
+    completeness: "partial",
+    output: rscOutputScope,
+    params: options.params,
+    state: options.peekRenderObservationState?.() ?? createEmptyAppPageRenderObservationState(),
+  });
   const outgoingElement = AppElementsWire.encodeOutgoingPayload({
     element: options.element,
     layoutFlags,
     ...(artifactCompatibility ? { artifactCompatibility } : {}),
+    renderObservation: payloadRenderObservation,
   });
 
   const compileEnd = options.isProduction ? undefined : performance.now();
@@ -397,6 +435,19 @@ export async function renderAppPageLifecycle(
         options.isProduction && shouldCaptureRscForCacheMetadata ? capturedRscDataRef.value : null,
       cleanPathname: options.cleanPathname,
       consumeDynamicUsage: options.consumeDynamicUsage,
+      consumeRenderObservationState: options.consumeRenderObservationState,
+      createRscRenderObservation(input) {
+        return createAppPageRenderObservation({
+          boundaryOutcome: { kind: "success" },
+          cacheability: "public",
+          cacheTags: input.cacheTags,
+          cleanPathname: options.cleanPathname,
+          completeness: "complete",
+          output: rscOutputScope,
+          params: options.params,
+          state: input.state,
+        });
+      },
       dynamicUsedDuringBuild,
       getPageTags() {
         return options.getPageTags();
@@ -574,6 +625,31 @@ export async function renderAppPageLifecycle(
       capturedRscDataPromise: capturedRscDataRef.value,
       cleanPathname: options.cleanPathname,
       consumeDynamicUsage: options.consumeDynamicUsage,
+      consumeRenderObservationState: options.consumeRenderObservationState,
+      createHtmlRenderObservation(input) {
+        return createAppPageRenderObservation({
+          boundaryOutcome: { kind: "success" },
+          cacheability: "public",
+          cacheTags: input.cacheTags,
+          cleanPathname: options.cleanPathname,
+          completeness: "complete",
+          output: htmlOutputScope,
+          params: options.params,
+          state: input.state,
+        });
+      },
+      createRscRenderObservation(input) {
+        return createAppPageRenderObservation({
+          boundaryOutcome: { kind: "success" },
+          cacheability: "public",
+          cacheTags: input.cacheTags,
+          cleanPathname: options.cleanPathname,
+          completeness: "complete",
+          output: rscOutputScope,
+          params: options.params,
+          state: input.state,
+        });
+      },
       getPageTags() {
         return options.getPageTags();
       },

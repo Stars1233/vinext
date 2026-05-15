@@ -4,6 +4,7 @@ import React from "react";
 import {
   APP_ARTIFACT_COMPATIBILITY_KEY,
   APP_LAYOUT_FLAGS_KEY,
+  APP_RENDER_OBSERVATION_KEY,
   APP_ROOT_LAYOUT_KEY,
   isAppElementsRecord,
   type AppOutgoingElements,
@@ -16,6 +17,7 @@ import {
 } from "../packages/vinext/src/server/artifact-compatibility.js";
 import type { LayoutClassificationOptions } from "../packages/vinext/src/server/app-page-execution.js";
 import { renderAppPageLifecycle } from "../packages/vinext/src/server/app-page-render.js";
+import type { CachedAppPageValue } from "../packages/vinext/src/shims/cache.js";
 
 function captureRecord(value: ReactNode | AppOutgoingElements): Record<string, unknown> {
   if (!isAppElementsRecord(value)) {
@@ -91,7 +93,15 @@ function createCommonOptions() {
         status: specialError.statusCode,
       }),
   );
-  const isrSet = vi.fn(async () => {});
+  const isrSet = vi.fn(
+    async (
+      _key: string,
+      _data: CachedAppPageValue,
+      _revalidateSeconds: number,
+      _tags: string[],
+      _expireSeconds?: number,
+    ) => {},
+  );
 
   return {
     isrSet,
@@ -311,6 +321,12 @@ describe("app page render lifecycle", () => {
     const response = await renderAppPageLifecycle({
       ...common.options,
       consumeDynamicUsage,
+      consumeRenderObservationState() {
+        return {
+          dynamicFetches: ["https://api.example.test/posts?token=secret"],
+          requestApis: ["headers"],
+        };
+      },
       isProduction: true,
       isRscRequest: true,
       revalidateSeconds: 60,
@@ -332,6 +348,24 @@ describe("app page render lifecycle", () => {
       ["_N_T_/posts/post"],
       undefined,
     );
+    const cachedValue = common.isrSet.mock.calls[0]?.[1];
+    expect(cachedValue?.renderObservation).toMatchObject({
+      boundaryOutcome: { kind: "success" },
+      cacheability: "public",
+      completeness: "complete",
+      output: {
+        kind: "app-rsc",
+        mountedSlotsFingerprint: null,
+        renderEpoch: null,
+        rootBoundaryId: null,
+        routeId: "route:/posts/[slug]",
+      },
+      requestApis: expect.arrayContaining([
+        { kind: "headers", status: "observed" },
+        { kind: "params", status: "observed" },
+      ]),
+    });
+    expect(JSON.stringify(cachedValue?.renderObservation)).not.toContain("secret");
     expect(consumeDynamicUsage).toHaveBeenCalledTimes(2);
   });
 
@@ -844,6 +878,47 @@ describe("layoutFlags injection into RSC payload", () => {
       rootBoundaryId: "/(shop)",
       renderEpoch: null,
     });
+  });
+
+  it("injects partial render observation metadata into outgoing AppElements payloads", async () => {
+    const { options, getCapturedElement } = createRscOptions({
+      element: {
+        [APP_ROOT_LAYOUT_KEY]: "/",
+        "layout:/": "root-layout",
+        "page:/test": "test-page",
+      },
+    });
+
+    await renderAppPageLifecycle({
+      ...options,
+      params: { id: "123" },
+      peekRenderObservationState() {
+        return {
+          dynamicFetches: ["https://api.example.test/posts?token=secret"],
+          requestApis: ["headers"],
+        };
+      },
+    });
+
+    const renderObservation = getCapturedElement()[APP_RENDER_OBSERVATION_KEY];
+
+    expect(renderObservation).toMatchObject({
+      boundaryOutcome: { kind: "unknown" },
+      cacheability: "unknown",
+      completeness: "partial",
+      output: {
+        kind: "app-rsc",
+        mountedSlotsFingerprint: null,
+        renderEpoch: null,
+        rootBoundaryId: "/",
+        routeId: "route:/test",
+      },
+      requestApis: expect.arrayContaining([
+        { kind: "headers", status: "observed" },
+        { kind: "params", status: "observed" },
+      ]),
+    });
+    expect(JSON.stringify(renderObservation)).not.toContain("secret");
   });
 
   it("injects __layoutFlags for multiple independently classified layouts", async () => {

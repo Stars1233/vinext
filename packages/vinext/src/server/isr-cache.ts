@@ -29,6 +29,7 @@ import {
   shouldUsePreserveUiCacheVariant,
   type AppRscRenderMode,
 } from "./app-rsc-render-mode.js";
+import type { RenderObservation } from "./cache-proof.js";
 export { normalizeMountedSlotsHeader };
 
 export type ISRCacheEntry = {
@@ -174,8 +175,9 @@ export function buildAppPageCacheValue(
   html: string,
   rscData?: ArrayBuffer,
   status?: number,
+  renderObservation?: RenderObservation,
 ): CachedAppPageValue {
-  return {
+  const value: CachedAppPageValue = {
     kind: "APP_PAGE",
     html,
     rscData,
@@ -183,6 +185,10 @@ export function buildAppPageCacheValue(
     postponed: undefined,
     status,
   };
+  if (renderObservation) {
+    value.renderObservation = renderObservation;
+  }
+  return value;
 }
 
 function normalizeCachePathname(pathname: string): string {

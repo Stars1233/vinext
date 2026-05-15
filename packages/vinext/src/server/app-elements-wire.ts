@@ -4,6 +4,7 @@ import {
   parseArtifactCompatibilityEnvelope,
   type ArtifactCompatibilityEnvelope,
 } from "./artifact-compatibility.js";
+import type { RenderObservation } from "./cache-proof.js";
 
 const APP_INTERCEPTION_SEPARATOR = "\0";
 
@@ -11,6 +12,7 @@ export const APP_ARTIFACT_COMPATIBILITY_KEY = "__artifactCompatibility";
 export const APP_INTERCEPTION_CONTEXT_KEY = "__interceptionContext";
 export const APP_LAYOUT_IDS_KEY = "__layoutIds";
 export const APP_LAYOUT_FLAGS_KEY = "__layoutFlags";
+export const APP_RENDER_OBSERVATION_KEY = "__renderObservation";
 export const APP_ROUTE_KEY = "__route";
 export const APP_ROOT_LAYOUT_KEY = "__rootLayout";
 export const APP_UNMATCHED_SLOT_WIRE_VALUE = "__VINEXT_UNMATCHED_SLOT__";
@@ -79,7 +81,7 @@ type AppElementsWireMetadataEntries = Readonly<{
  * which only carry render-time values.
  */
 export type AppOutgoingElements = Readonly<
-  Record<string, ReactNode | LayoutFlags | ArtifactCompatibilityEnvelope>
+  Record<string, ReactNode | LayoutFlags | ArtifactCompatibilityEnvelope | RenderObservation>
 >;
 
 type AppElementsWireKeys = {
@@ -87,6 +89,7 @@ type AppElementsWireKeys = {
   readonly interceptionContext: typeof APP_INTERCEPTION_CONTEXT_KEY;
   readonly layoutIds: typeof APP_LAYOUT_IDS_KEY;
   readonly layoutFlags: typeof APP_LAYOUT_FLAGS_KEY;
+  readonly renderObservation: typeof APP_RENDER_OBSERVATION_KEY;
   readonly rootLayout: typeof APP_ROOT_LAYOUT_KEY;
   readonly route: typeof APP_ROUTE_KEY;
 };
@@ -102,6 +105,7 @@ type AppElementsWireCodec = {
     element: ReactNode | Readonly<Record<string, ReactNode>>;
     artifactCompatibility?: ArtifactCompatibilityEnvelope;
     layoutFlags: LayoutFlags;
+    renderObservation?: RenderObservation;
   }): ReactNode | AppOutgoingElements;
   encodePageId(routePath: string, interceptionContext: string | null): string;
   encodeRouteId(routePath: string, interceptionContext: string | null): string;
@@ -311,16 +315,24 @@ export function buildOutgoingAppPayload(input: {
   element: ReactNode | Readonly<Record<string, ReactNode>>;
   artifactCompatibility?: ArtifactCompatibilityEnvelope;
   layoutFlags: LayoutFlags;
+  renderObservation?: RenderObservation;
 }): ReactNode | AppOutgoingElements {
   if (!isAppElementsRecord(input.element)) {
     return input.element;
   }
-  return {
+  const payload: Record<
+    string,
+    ReactNode | LayoutFlags | ArtifactCompatibilityEnvelope | RenderObservation
+  > = {
     ...input.element,
     [APP_LAYOUT_FLAGS_KEY]: input.layoutFlags,
     [APP_ARTIFACT_COMPATIBILITY_KEY]:
       input.artifactCompatibility ?? createArtifactCompatibilityEnvelope(),
   };
+  if (input.renderObservation) {
+    payload[APP_RENDER_OBSERVATION_KEY] = input.renderObservation;
+  }
+  return payload;
 }
 
 function readArtifactCompatibilityMetadata(value: unknown): ArtifactCompatibilityEnvelope {
@@ -383,6 +395,7 @@ export const AppElementsWire: AppElementsWireCodec = {
     interceptionContext: APP_INTERCEPTION_CONTEXT_KEY,
     layoutIds: APP_LAYOUT_IDS_KEY,
     layoutFlags: APP_LAYOUT_FLAGS_KEY,
+    renderObservation: APP_RENDER_OBSERVATION_KEY,
     rootLayout: APP_ROOT_LAYOUT_KEY,
     route: APP_ROUTE_KEY,
   },

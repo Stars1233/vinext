@@ -29,6 +29,7 @@ import { workUnitAsyncStorage } from "./internal/work-unit-async-storage.js";
 import { makeHangingPromise } from "./internal/make-hanging-promise.js";
 import { readCacheControlNumberField } from "../utils/cache-control-metadata.js";
 import { encodeCacheTag, encodeCacheTags } from "../utils/encode-cache-tag.js";
+import type { RenderObservation } from "../server/cache-proof.js";
 
 // ---------------------------------------------------------------------------
 // Lazy accessor for cache context — avoids circular imports with cache-runtime.
@@ -97,6 +98,7 @@ export type CachedAppPageValue = {
   rscData: ArrayBuffer | undefined;
   headers: Record<string, string | string[]> | undefined;
   postponed: string | undefined;
+  renderObservation?: RenderObservation;
   status: number | undefined;
 };
 

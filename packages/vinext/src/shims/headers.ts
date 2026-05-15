@@ -23,6 +23,7 @@ import {
   getRequestContext,
   runWithUnifiedStateMutation,
 } from "./unified-request-context.js";
+import type { RenderRequestApiKind } from "../server/cache-proof.js";
 
 // ---------------------------------------------------------------------------
 // Request context
@@ -43,6 +44,7 @@ export type HeadersAccessPhase = "render" | "action" | "route-handler";
 export type VinextHeadersShimState = {
   headersContext: HeadersContext | null;
   dynamicUsageDetected: boolean;
+  renderRequestApiUsage: Set<RenderRequestApiKind>;
   /** Error recorded by throwIfInsideCacheScope for dev diagnostics, persists even if caught by user code. */
   invalidDynamicUsageError: unknown;
   pendingSetCookies: string[];
@@ -64,6 +66,7 @@ const _als = getOrCreateAls<VinextHeadersShimState>("vinext.nextHeadersShim.als"
 const _fallbackState = (_g[_FALLBACK_KEY] ??= {
   headersContext: null,
   dynamicUsageDetected: false,
+  renderRequestApiUsage: new Set<RenderRequestApiKind>(),
   invalidDynamicUsageError: null,
   pendingSetCookies: [],
   draftModeCookieHeader: null,
@@ -175,6 +178,21 @@ export function markDynamicUsage(): void {
     return;
   }
   state.dynamicUsageDetected = true;
+}
+
+export function markRenderRequestApiUsage(kind: RenderRequestApiKind): void {
+  _getState().renderRequestApiUsage.add(kind);
+}
+
+export function peekRenderRequestApiUsage(): RenderRequestApiKind[] {
+  return [..._getState().renderRequestApiUsage].sort();
+}
+
+export function consumeRenderRequestApiUsage(): RenderRequestApiKind[] {
+  const state = _getState();
+  const observed = [...state.renderRequestApiUsage].sort();
+  state.renderRequestApiUsage = new Set<RenderRequestApiKind>();
+  return observed;
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +333,7 @@ export function setHeadersContext(ctx: HeadersContext | null): void {
   if (ctx !== null) {
     state.headersContext = ctx;
     state.dynamicUsageDetected = false;
+    state.renderRequestApiUsage = new Set();
     state.pendingSetCookies = [];
     state.draftModeCookieHeader = null;
     state.phase = "render";
@@ -347,6 +366,7 @@ export function runWithHeadersContext<T>(
     return runWithUnifiedStateMutation((uCtx) => {
       uCtx.headersContext = ctx;
       uCtx.dynamicUsageDetected = false;
+      uCtx.renderRequestApiUsage = new Set();
       uCtx.pendingSetCookies = [];
       uCtx.draftModeCookieHeader = null;
       uCtx.phase = "render";
@@ -356,6 +376,7 @@ export function runWithHeadersContext<T>(
   const state: VinextHeadersShimState = {
     headersContext: ctx,
     dynamicUsageDetected: false,
+    renderRequestApiUsage: new Set(),
     invalidDynamicUsageError: null,
     pendingSetCookies: [],
     draftModeCookieHeader: null,
@@ -677,6 +698,7 @@ export function headersContextFromRequest(request: Request): HeadersContext {
  * the context is already available).
  */
 export function headers(): Promise<Headers> & Headers {
+  markRenderRequestApiUsage("headers");
   try {
     throwIfInsideCacheScope("headers()");
   } catch (error) {
@@ -707,6 +729,7 @@ export function headers(): Promise<Headers> & Headers {
  * Returns a ReadonlyRequestCookies-like object.
  */
 export function cookies(): Promise<RequestCookies> & RequestCookies {
+  markRenderRequestApiUsage("cookies");
   try {
     throwIfInsideCacheScope("cookies()");
   } catch (error) {
@@ -811,6 +834,7 @@ function draftModeCookieAttributes(): string {
  * - `disable()`: clears the bypass cookie
  */
 export async function draftMode(): Promise<DraftModeResult> {
+  markRenderRequestApiUsage("draftMode");
   throwIfInsideCacheScope("draftMode()");
 
   const state = _getState();

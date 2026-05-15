@@ -87,6 +87,7 @@ export function createRequestContext(opts?: Partial<UnifiedRequestContext>): Uni
     headersContext: null,
     actionRevalidationKind: 0,
     dynamicUsageDetected: false,
+    renderRequestApiUsage: new Set(),
     invalidDynamicUsageError: null,
     pendingSetCookies: [],
     draftModeCookieHeader: null,
@@ -100,6 +101,7 @@ export function createRequestContext(opts?: Partial<UnifiedRequestContext>): Uni
     currentRequestTags: [],
     currentFetchSoftTags: [],
     currentFetchCacheMode: null,
+    dynamicFetchUrls: new Set<string>(),
     isFetchDedupeActive: false,
     currentFetchDedupeEntries: new Map(),
     executionContext: _getInheritedExecutionContext(), // inherits from standalone ALS if present
@@ -157,14 +159,16 @@ export function runWithUnifiedStateMutation<T>(
 
   const childCtx = { ...parentCtx };
   // NOTE: This is a shallow clone. Array fields (pendingSetCookies,
-  // serverInsertedHTMLCallbacks, currentRequestTags, ssrHeadChildren), the
-  // _privateCache Map, requestCache WeakMap, and object fields (headersContext,
+  // serverInsertedHTMLCallbacks, currentRequestTags, ssrHeadChildren), Set
+  // fields (renderRequestApiUsage, dynamicFetchUrls), the _privateCache Map,
+  // requestCache WeakMap, and object fields (headersContext,
   // i18nContext, serverContext, ssrContext, executionContext,
   // requestScopedCacheLife) still share references with the parent until
   // replaced. requestCache is intentionally shared — nested scopes within
   // the same request should see the same cached values. The mutate
   // callback must replace those reference-typed slices (for example
-  // `ctx.currentRequestTags = []`) rather than mutating them in-place (for
+  // `ctx.currentRequestTags = []` or `ctx.renderRequestApiUsage = new Set()`)
+  // rather than mutating them in-place (for
   // example `ctx.currentRequestTags.push(...)`) or the parent scope will
   // observe those changes too. Keep this enumeration in sync with
   // UnifiedRequestContext: when adding a new reference-typed field, add it

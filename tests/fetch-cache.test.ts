@@ -41,6 +41,8 @@ const {
   setCurrentFetchSoftTags,
   getOriginalFetch,
   _resetPendingRefetches,
+  consumeDynamicFetchObservations,
+  peekDynamicFetchObservations,
 } = await import("../packages/vinext/src/shims/fetch-cache.js");
 const { getCacheHandler, revalidatePath, revalidateTag, MemoryCacheHandler, setCacheHandler } =
   await import("../packages/vinext/src/shims/cache.js");
@@ -289,6 +291,26 @@ describe("fetch cache shim", () => {
     const data2 = await res2.json();
     expect(data2.count).toBe(1); // Same render fetch is deduped
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("dedupes dynamic fetch observations within a fetch cache scope", async () => {
+    await fetch("https://api.example.com/dynamic?token=secret", {
+      cache: "no-store",
+    });
+    await fetch("https://api.example.com/dynamic?token=secret", {
+      cache: "no-store",
+    });
+    await fetch(new URL("https://api.example.com/other-dynamic"), {
+      cache: "no-store",
+    });
+
+    const expected = [
+      "https://api.example.com/dynamic?token=secret",
+      "https://api.example.com/other-dynamic",
+    ];
+    expect(peekDynamicFetchObservations()).toEqual(expected);
+    expect(consumeDynamicFetchObservations()).toEqual(expected);
+    expect(peekDynamicFetchObservations()).toEqual([]);
   });
 
   it("next.revalidate: false bypasses persistent cache but dedupes identical render fetches", async () => {

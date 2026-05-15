@@ -9,6 +9,7 @@ import {
   APP_INTERCEPTION_CONTEXT_KEY,
   APP_LAYOUT_IDS_KEY,
   APP_LAYOUT_FLAGS_KEY,
+  APP_RENDER_OBSERVATION_KEY,
   APP_ROOT_LAYOUT_KEY,
   APP_ROUTE_KEY,
   APP_UNMATCHED_SLOT_WIRE_VALUE,
@@ -26,6 +27,7 @@ import {
   evaluateArtifactCompatibility,
   RSC_PAYLOAD_SCHEMA_VERSION,
 } from "../packages/vinext/src/server/artifact-compatibility.js";
+import { buildRenderObservation } from "../packages/vinext/src/server/cache-proof.js";
 
 describe("AppElementsWire", () => {
   it("encodes outgoing record payloads without mutating caller-owned records", () => {
@@ -620,6 +622,40 @@ describe("buildOutgoingAppPayload", () => {
         rootBoundaryId: "root-a",
         renderEpoch: null,
       });
+    }
+  });
+
+  it("attaches render observation metadata on the returned record when provided", () => {
+    const renderObservation = buildRenderObservation({
+      boundaryOutcome: { kind: "success" },
+      cacheability: "public",
+      cacheTags: ["posts"],
+      completeness: "complete",
+      dynamicFetches: ["https://api.example.test/posts?token=secret"],
+      output: {
+        kind: "app-rsc",
+        mountedSlotsFingerprint: null,
+        renderEpoch: null,
+        rootBoundaryId: "layout:/",
+        routeId: "route:/posts",
+      },
+      pathTags: ["/posts"],
+      requestApis: [
+        { kind: "headers", status: "notObserved" },
+        { kind: "cookies", status: "notObserved" },
+      ],
+    });
+
+    const result = buildOutgoingAppPayload({
+      element: { "page:/posts": "posts-page" },
+      layoutFlags: { "layout:/": "s" },
+      renderObservation,
+    });
+
+    expect(isAppElementsRecord(result)).toBe(true);
+    if (isAppElementsRecord(result)) {
+      expect(result[APP_RENDER_OBSERVATION_KEY]).toEqual(renderObservation);
+      expect(JSON.stringify(result[APP_RENDER_OBSERVATION_KEY])).not.toContain("secret");
     }
   });
 

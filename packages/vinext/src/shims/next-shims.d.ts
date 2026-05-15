@@ -584,6 +584,7 @@ declare module "next/cache" {
         rscData: ArrayBuffer | undefined;
         headers: Record<string, string | string[]> | undefined;
         postponed: string | undefined;
+        renderObservation?: unknown;
         status: number | undefined;
       }
     | {

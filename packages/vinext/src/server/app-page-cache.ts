@@ -7,6 +7,11 @@ import { mergeMiddlewareResponseHeaders } from "./middleware-response-headers.js
 import { readStreamAsText } from "../utils/text-stream.js";
 import { encodeCacheTag } from "../utils/encode-cache-tag.js";
 import type { AppRscRenderMode } from "./app-rsc-render-mode.js";
+import {
+  createEmptyAppPageRenderObservationState,
+  type AppPageRenderObservationState,
+} from "./app-page-render-observation.js";
+import type { RenderObservation } from "./cache-proof.js";
 
 type AppPageDebugLogger = (event: string, detail: string) => void;
 type AppPageCacheGetter = (key: string) => Promise<ISRCacheEntry | null>;
@@ -23,10 +28,17 @@ type AppPageRequestCacheLife = {
   expire?: number;
 };
 
+type BuildAppPageCacheRenderObservation = (input: {
+  cacheTags: readonly string[];
+  state: AppPageRenderObservationState;
+}) => RenderObservation;
+
 type AppPageCacheRenderResult = {
   cacheControl?: CacheControlMetadata;
   html: string;
+  htmlRenderObservation?: RenderObservation;
   rscData: ArrayBuffer;
+  rscRenderObservation?: RenderObservation;
   tags: string[];
 };
 
@@ -69,6 +81,9 @@ type FinalizeAppPageHtmlCacheResponseOptions = {
   capturedRscDataPromise: Promise<ArrayBuffer> | null;
   cleanPathname: string;
   consumeDynamicUsage: () => boolean;
+  consumeRenderObservationState?: () => AppPageRenderObservationState;
+  createHtmlRenderObservation?: BuildAppPageCacheRenderObservation;
+  createRscRenderObservation?: BuildAppPageCacheRenderObservation;
   getPageTags: () => string[];
   getRequestCacheLife?: () => AppPageRequestCacheLife | null;
   isrDebug?: AppPageDebugLogger;
@@ -89,6 +104,8 @@ type ScheduleAppPageRscCacheWriteOptions = {
   capturedRscDataPromise: Promise<ArrayBuffer> | null;
   cleanPathname: string;
   consumeDynamicUsage: () => boolean;
+  consumeRenderObservationState?: () => AppPageRenderObservationState;
+  createRscRenderObservation?: BuildAppPageCacheRenderObservation;
   dynamicUsedDuringBuild: boolean;
   getPageTags: () => string[];
   getRequestCacheLife?: () => AppPageRequestCacheLife | null;
@@ -301,7 +318,12 @@ export async function readAppPageCacheResponse(
               options.mountedSlotsHeader,
               options.renderMode,
             ),
-            buildAppPageCacheValue("", revalidatedPage.rscData, 200),
+            buildAppPageCacheValue(
+              "",
+              revalidatedPage.rscData,
+              200,
+              revalidatedPage.rscRenderObservation,
+            ),
             revalidateSeconds,
             revalidatedPage.tags,
             expireSeconds,
@@ -316,7 +338,12 @@ export async function readAppPageCacheResponse(
           writes.push(
             options.isrSet(
               options.isrHtmlKey(options.cleanPathname),
-              buildAppPageCacheValue(revalidatedPage.html, undefined, 200),
+              buildAppPageCacheValue(
+                revalidatedPage.html,
+                undefined,
+                200,
+                revalidatedPage.htmlRenderObservation,
+              ),
               revalidateSeconds,
               revalidatedPage.tags,
               expireSeconds,
@@ -404,10 +431,25 @@ export function finalizeAppPageHtmlCacheResponse(
       }
 
       const pageTags = options.getPageTags();
+      // This continuation is scheduled while the request ALS scope is active.
+      // It intentionally consumes observation state only after the HTML stream
+      // drains, so late Server Component request API usage is included.
+      // Consume once: HTML and captured RSC artifacts come from the same render
+      // pass, so both cache artifacts share the same observation snapshot.
+      const observationState =
+        options.consumeRenderObservationState?.() ?? createEmptyAppPageRenderObservationState();
+      const htmlRenderObservation = options.createHtmlRenderObservation?.({
+        cacheTags: pageTags,
+        state: observationState,
+      });
+      const rscRenderObservation = options.createRscRenderObservation?.({
+        cacheTags: pageTags,
+        state: observationState,
+      });
       const writes = [
         options.isrSet(
           htmlKey,
-          buildAppPageCacheValue(cachedHtml, undefined, 200),
+          buildAppPageCacheValue(cachedHtml, undefined, 200, htmlRenderObservation),
           cachePolicy.revalidateSeconds,
           pageTags,
           cachePolicy.expireSeconds,
@@ -419,7 +461,7 @@ export function finalizeAppPageHtmlCacheResponse(
           options.capturedRscDataPromise.then((rscData) =>
             options.isrSet(
               rscKey,
-              buildAppPageCacheValue("", rscData, 200),
+              buildAppPageCacheValue("", rscData, 200, rscRenderObservation),
               cachePolicy.revalidateSeconds,
               pageTags,
               cachePolicy.expireSeconds,
@@ -508,11 +550,21 @@ export function scheduleAppPageRscCacheWrite(
         return;
       }
 
+      const pageTags = options.getPageTags();
+      // This continuation is scheduled while the request ALS scope is active.
+      // It intentionally consumes observation state only after the captured RSC
+      // stream resolves, so late Server Component request API usage is included.
+      const observationState =
+        options.consumeRenderObservationState?.() ?? createEmptyAppPageRenderObservationState();
+      const rscRenderObservation = options.createRscRenderObservation?.({
+        cacheTags: pageTags,
+        state: observationState,
+      });
       await options.isrSet(
         rscKey,
-        buildAppPageCacheValue("", rscData, 200),
+        buildAppPageCacheValue("", rscData, 200, rscRenderObservation),
         cachePolicy.revalidateSeconds,
-        options.getPageTags(),
+        pageTags,
         cachePolicy.expireSeconds,
       );
       options.isrDebug?.("RSC cache written", rscKey);

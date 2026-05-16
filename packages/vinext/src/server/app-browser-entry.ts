@@ -86,10 +86,7 @@ import {
   installDevErrorOverlay,
 } from "./dev-error-overlay.js";
 import { DANGEROUS_URL_BLOCK_MESSAGE, isDangerousScheme } from "vinext/shims/url-safety";
-import {
-  getServerActionNotFoundClientMessage,
-  isServerActionNotFoundResponse,
-} from "./server-action-not-found.js";
+import { throwOnServerActionNotFound } from "./server-action-not-found.js";
 import {
   createRscRequestHeaders,
   createRscRequestUrl,
@@ -856,9 +853,9 @@ function registerServerActionCallback(): void {
       body,
     });
 
-    if (isServerActionNotFoundResponse(fetchResponse)) {
-      throw new Error(getServerActionNotFoundClientMessage(id));
-    }
+    // Surface an `UnrecognizedActionError` so client `catch` blocks can detect
+    // client/server deployment skew via `unstable_isUnrecognizedActionError`.
+    throwOnServerActionNotFound(fetchResponse, id);
 
     const actionRedirect = fetchResponse.headers.get(ACTION_REDIRECT_HEADER);
     if (actionRedirect) {

@@ -1980,47 +1980,18 @@ export function unstable_rethrow(error: unknown): void {
 // ---------------------------------------------------------------------------
 // Unrecognized server-action errors
 //
-// `unstable_isUnrecognizedActionError` lets client code detect when a server
-// action call failed because the server didn't recognize the action id — this
-// typically means the client bundle and the server are from different
-// deployments and a hard reload is required.
-//
-// Ported from Next.js:
-//   https://github.com/vercel/next.js/blob/canary/packages/next/src/client/components/unrecognized-action-error.ts
+// `UnrecognizedActionError` / `unstable_isUnrecognizedActionError` live in a
+// dedicated zero-dependency module so this `next/navigation` shim and vinext's
+// client server-action dispatcher (`server/server-action-not-found.ts`) share
+// one class. `instanceof` is identity-based per module instance, so the
+// dispatcher and user code must resolve the same class for the predicate to
+// work. Re-exported here to keep the public `next/navigation` surface intact.
 // ---------------------------------------------------------------------------
 
-/**
- * Error class for unrecognized server-action calls. Thrown by the App Router
- * server-action handler when the requested action id is not present in the
- * current build's action manifest.
- *
- * vinext does not yet construct this error from its server-action dispatcher
- * — it's exposed primarily so user code can use the predicate below
- * (`unstable_isUnrecognizedActionError`) as a stable `instanceof` check.
- * Ported as a 1:1 alias of Next.js's class so deployments that throw it
- * directly (or third-party action wrappers) interoperate.
- */
-export class UnrecognizedActionError extends Error {
-  constructor(...args: ConstructorParameters<typeof Error>) {
-    super(...args);
-    this.name = "UnrecognizedActionError";
-  }
-}
-
-/**
- * Returns true if the error came from a server action whose id was not
- * recognized by the server. Useful inside `catch` blocks that surround
- * `await myAction(...)` calls; reloading the page generally fixes the
- * underlying client/server deployment mismatch.
- *
- * Ported from Next.js:
- *   https://github.com/vercel/next.js/blob/canary/packages/next/src/client/components/unrecognized-action-error.ts
- */
-export function unstable_isUnrecognizedActionError(
-  error: unknown,
-): error is UnrecognizedActionError {
-  return !!(error && typeof error === "object" && error instanceof UnrecognizedActionError);
-}
+export {
+  UnrecognizedActionError,
+  unstable_isUnrecognizedActionError,
+} from "./unrecognized-action-error.js";
 
 // ---------------------------------------------------------------------------
 // Helpers

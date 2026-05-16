@@ -1,4 +1,5 @@
 import { NEXTJS_ACTION_NOT_FOUND_HEADER as SERVER_ACTION_NOT_FOUND_HEADER } from "./headers.js";
+import { UnrecognizedActionError } from "vinext/shims/unrecognized-action-error";
 
 const SERVER_ACTION_NOT_FOUND_DOCS =
   "https://nextjs.org/docs/messages/failed-to-find-server-action";
@@ -14,7 +15,7 @@ export function getServerActionNotFoundMessage(actionId: string | null): string 
   )} This request might be from an older or newer deployment.\nRead more: ${SERVER_ACTION_NOT_FOUND_DOCS}`;
 }
 
-export function getServerActionNotFoundClientMessage(actionId: string): string {
+function getServerActionNotFoundClientMessage(actionId: string): string {
   return `Server Action "${actionId}" was not found on the server. \nRead more: ${SERVER_ACTION_NOT_FOUND_DOCS}`;
 }
 
@@ -53,6 +54,29 @@ export function createServerActionNotFoundResponse(): Response {
   });
 }
 
-export function isServerActionNotFoundResponse(response: Pick<Response, "headers">): boolean {
+function isServerActionNotFoundResponse(response: Pick<Response, "headers">): boolean {
   return response.headers.get(SERVER_ACTION_NOT_FOUND_HEADER) === "1";
+}
+
+/**
+ * Throw an `UnrecognizedActionError` when the server reported the requested
+ * server action id as unknown (the `x-nextjs-action-not-found` response
+ * header); otherwise return so the caller can keep processing the response.
+ *
+ * The client-side counterpart of `createServerActionNotFoundResponse`. The
+ * typed error lets client `catch` blocks call the public
+ * `unstable_isUnrecognizedActionError` predicate to detect client/server
+ * deployment skew and recover (typically by reloading the page).
+ *
+ * Mirrors Next.js, whose server-action reducer throws `UnrecognizedActionError`
+ * on this same response header:
+ * https://github.com/vercel/next.js/blob/canary/packages/next/src/client/components/router-reducer/reducers/server-action-reducer.ts
+ */
+export function throwOnServerActionNotFound(
+  response: Pick<Response, "headers">,
+  actionId: string,
+): void {
+  if (isServerActionNotFoundResponse(response)) {
+    throw new UnrecognizedActionError(getServerActionNotFoundClientMessage(actionId));
+  }
 }

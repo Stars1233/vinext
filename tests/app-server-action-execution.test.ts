@@ -9,6 +9,11 @@ import {
   type HandleProgressiveServerActionRequestOptions,
 } from "../packages/vinext/src/server/app-server-action-execution.js";
 import {
+  createServerActionNotFoundResponse,
+  throwOnServerActionNotFound,
+} from "../packages/vinext/src/server/server-action-not-found.js";
+import { unstable_isUnrecognizedActionError } from "../packages/vinext/src/shims/navigation.js";
+import {
   VINEXT_RSC_COMPATIBILITY_ID_HEADER,
   VINEXT_RSC_VARY_HEADER,
 } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
@@ -946,5 +951,33 @@ describe("app server action execution helpers", () => {
         returnValue: { ok: false, data: fallbackError },
       });
     }
+  });
+});
+
+// The client-side counterpart of `createServerActionNotFoundResponse`: when the
+// server cannot resolve an action id, client code must be able to detect the
+// deployment skew through the public `unstable_isUnrecognizedActionError`
+// predicate so it can recover (typically by reloading the page).
+//
+// Mirrors Next.js, whose server-action reducer throws `UnrecognizedActionError`
+// on the `x-nextjs-action-not-found` response header:
+// https://github.com/vercel/next.js/blob/canary/packages/next/src/client/components/router-reducer/reducers/server-action-reducer.ts
+describe("client recognition of unrecognized server actions", () => {
+  it("raises an error the public predicate recognizes, naming the stale action id", () => {
+    let caught: unknown;
+    try {
+      // `createServerActionNotFoundResponse()` is exactly what the server emits.
+      throwOnServerActionNotFound(createServerActionNotFoundResponse(), "decafc0ffeebad01");
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(unstable_isUnrecognizedActionError(caught)).toBe(true);
+    expect(String(caught)).toContain('Server Action "decafc0ffeebad01" was not found');
+  });
+
+  it("does not throw for a recognized action response", () => {
+    // A recognized action returns an ordinary response without the not-found header.
+    expect(() => throwOnServerActionNotFound(new Response("ok"), "abc")).not.toThrow();
   });
 });

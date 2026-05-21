@@ -53,6 +53,7 @@ import {
 } from "./request-pipeline.js";
 import { notFoundResponse } from "./http-error-responses.js";
 import { hasBasePath, stripBasePath } from "../utils/base-path.js";
+import { mergeRewriteQuery } from "../utils/query.js";
 import {
   ASSET_PREFIX_URL_DIR,
   assetPrefixPathname,
@@ -1760,8 +1761,10 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
             await sendWebResponse(proxyResponse, req, res, compress);
             return;
           }
-          resolvedUrl = rewritten;
-          resolvedPathname = rewritten.split("?")[0];
+          // Preserve the original request's query params across the config
+          // rewrite. Matches Next.js `Object.assign(parsedUrl.query, ...)`.
+          resolvedUrl = mergeRewriteQuery(resolvedUrl, rewritten);
+          resolvedPathname = resolvedUrl.split("?")[0];
         }
       }
 
@@ -1817,8 +1820,8 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
             await sendWebResponse(proxyResponse, req, res, compress);
             return;
           }
-          resolvedUrl = rewritten;
-          resolvedPathname = rewritten.split("?")[0];
+          resolvedUrl = mergeRewriteQuery(resolvedUrl, rewritten);
+          resolvedPathname = resolvedUrl.split("?")[0];
         }
       }
 
@@ -1849,7 +1852,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
             }
             response = await renderPage(
               webRequest,
-              fallbackRewrite,
+              mergeRewriteQuery(resolvedUrl, fallbackRewrite),
               ssrManifest,
               undefined,
               middlewareResponseHeaders,

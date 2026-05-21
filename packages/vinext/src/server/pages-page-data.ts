@@ -98,6 +98,15 @@ type RenderPagesIsrHtmlOptions = {
 export type ResolvePagesPageDataOptions = {
   applyRequestContexts: () => void;
   buildId: string | null;
+  /**
+   * When true, this is a `/_next/data/<buildId>/<page>.json` request. Callers
+   * that respond with a JSON envelope (`{ pageProps }`) instead of HTML must
+   * bypass the HTML ISR cache: a cached HTML body cannot be reshaped into the
+   * expected JSON shape, and storing JSON in the HTML cache would corrupt
+   * subsequent HTML hits. Next.js handles this the same way — see
+   * `isNextDataRequest` checks in `packages/next/src/server/base-server.ts`.
+   */
+  isDataReq?: boolean;
   createGsspReqRes: () => PagesGsspContextResponse;
   createPageElement: (pageProps: Record<string, unknown>) => ReactNode;
   fontLinkHeader: string;
@@ -154,7 +163,13 @@ function buildPagesNotFoundResponse(): Response {
 }
 
 function buildPagesDataNotFoundResponse(): Response {
-  return new Response("404", { status: 404 });
+  // Matches Next.js: `/_next/data/<buildId>/<page>.json` 404 responses use
+  // application/json with an empty object body so clients can call
+  // `res.json()` without throwing before inspecting the status code.
+  return new Response("{}", {
+    status: 404,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 function resolvePagesRedirectStatus(redirect: PagesRedirectResult): number {
@@ -306,9 +321,14 @@ export async function resolvePagesPageData(
       );
 
       if (!isValidPath) {
+        // For data requests (`/_next/data/...json`), return a JSON-shaped 404
+        // so the client router can `res.json()` without blowing up — matches
+        // Next.js' behavior. HTML navigations still get the HTML 404 page.
         return {
           kind: "response",
-          response: buildPagesNotFoundResponse(),
+          response: options.isDataReq
+            ? buildPagesDataNotFoundResponse()
+            : buildPagesNotFoundResponse(),
         };
       }
     }
@@ -354,7 +374,9 @@ export async function resolvePagesPageData(
     if (result?.notFound) {
       return {
         kind: "response",
-        response: buildPagesDataNotFoundResponse(),
+        response: options.isDataReq
+          ? buildPagesDataNotFoundResponse()
+          : buildPagesNotFoundResponse(),
       };
     }
 
@@ -369,7 +391,13 @@ export async function resolvePagesPageData(
     const cached = await options.isrGet(cacheKey);
     const cachedValue = cached?.value.value;
 
-    if (cachedValue?.kind === "PAGES" && cached && !cached.isStale && !options.scriptNonce) {
+    if (
+      cachedValue?.kind === "PAGES" &&
+      cached &&
+      !cached.isStale &&
+      !options.scriptNonce &&
+      !options.isDataReq
+    ) {
       return {
         kind: "response",
         response: buildPagesCacheResponse(
@@ -383,7 +411,13 @@ export async function resolvePagesPageData(
       };
     }
 
-    if (cachedValue?.kind === "PAGES" && cached && cached.isStale && !options.scriptNonce) {
+    if (
+      cachedValue?.kind === "PAGES" &&
+      cached &&
+      cached.isStale &&
+      !options.scriptNonce &&
+      !options.isDataReq
+    ) {
       options.triggerBackgroundRegeneration(
         cacheKey,
         async function () {
@@ -467,7 +501,9 @@ export async function resolvePagesPageData(
     if (result?.notFound) {
       return {
         kind: "response",
-        response: buildPagesDataNotFoundResponse(),
+        response: options.isDataReq
+          ? buildPagesDataNotFoundResponse()
+          : buildPagesNotFoundResponse(),
       };
     }
 

@@ -1187,6 +1187,80 @@ describe("Pages Router integration", () => {
     const res = await fetch(`${baseUrl}/`);
     expect(res.status).toBe(200);
   });
+
+  // ── /_next/data JSON endpoint (issue #1330) ──────────────────────
+  // Ported from Next.js: test/e2e/middleware-general/test/index.test.ts
+  // ("should trigger middleware for data requests").
+  describe("/_next/data JSON endpoint", () => {
+    // pages-basic's next.config.mjs pins the build id to "test-build-id".
+    // In dev the plugin now reads this from the resolved config so the
+    // value matches the prod-server's embedded buildId.
+    const BUILD_ID = "test-build-id";
+
+    it("returns { pageProps } JSON for a getServerSideProps page", async () => {
+      const res = await fetch(`${baseUrl}/_next/data/${BUILD_ID}/ssr.json`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      const json = (await res.json()) as { pageProps: { message: string } };
+      expect(json.pageProps.message).toBe("Hello from getServerSideProps");
+    });
+
+    it("returns { pageProps } JSON for a getStaticProps page", async () => {
+      // /isr-test uses getStaticProps with revalidate; the data endpoint
+      // must bypass the HTML ISR cache and surface the props as JSON
+      // (mirroring Next.js' `isNextDataRequest` cache-bypass path).
+      const res = await fetch(`${baseUrl}/_next/data/${BUILD_ID}/isr-test.json`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      const json = (await res.json()) as { pageProps: Record<string, unknown> };
+      expect(json).toHaveProperty("pageProps");
+      expect(typeof json.pageProps).toBe("object");
+    });
+
+    it("normalizes the URL to /<page> BEFORE middleware runs", async () => {
+      const res = await fetch(`${baseUrl}/_next/data/${BUILD_ID}/ssr.json`);
+      expect(res.status).toBe(200);
+      // Middleware exposes the pathname it observed via `x-mw-pathname`.
+      // The raw `/_next/data/...` should never reach the middleware function —
+      // Next.js normalizes it to `/ssr` first.
+      expect(res.headers.get("x-mw-pathname")).toBe("/ssr");
+      // The middleware also sets `x-custom-middleware: active` on every match,
+      // proving the middleware actually executed for this request.
+      expect(res.headers.get("x-custom-middleware")).toBe("active");
+    });
+
+    it("returns 404 JSON for an unknown page", async () => {
+      const res = await fetch(`${baseUrl}/_next/data/${BUILD_ID}/totally-missing-page.json`);
+      expect(res.status).toBe(404);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      // Body must still be valid JSON so naive clients calling `.json()` do
+      // not throw before checking the status code.
+      expect(await res.json()).toEqual({});
+    });
+
+    it("returns JSON 404 when getStaticPaths fallback:false rejects the path", async () => {
+      // /blog/[slug] has `fallback: false` and only allows the slugs listed
+      // in getStaticPaths. An unlisted slug must produce a JSON 404 for
+      // data requests (not the HTML 404 page) so the client router can
+      // hard-navigate instead of failing to parse HTML as JSON.
+      const res = await fetch(
+        `${baseUrl}/_next/data/${BUILD_ID}/blog/this-slug-does-not-exist.json`,
+      );
+      expect(res.status).toBe(404);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      expect(await res.json()).toEqual({});
+    });
+
+    it("returns JSON 404 for a stale buildId (dev)", async () => {
+      // Mirrors the prod-server path: when the buildId in the URL doesn't
+      // match the resolved buildId we surface a JSON 404 right away so the
+      // client can hard-navigate (instead of parsing Vite's HTML 404).
+      const res = await fetch(`${baseUrl}/_next/data/wrong-build-id/ssr.json`);
+      expect(res.status).toBe(404);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      expect(await res.json()).toEqual({});
+    });
+  });
 });
 
 describe("Pages Router dev server origin check", () => {
@@ -3254,6 +3328,62 @@ describe("Production server middleware (Pages Router)", () => {
     // Ensure encoded variants like /%2Evite/ are also blocked
     const res = await fetch(`${prodUrl}/%2Evite/ssr-manifest.json`);
     expect(res.status).toBe(404);
+  });
+
+  // ── /_next/data JSON endpoint in production (issue #1330) ─────────
+  // Ported from Next.js: test/e2e/middleware-general/test/index.test.ts
+  // ("should trigger middleware for data requests", "should normalize data
+  // requests into page requests").
+  describe("/_next/data JSON endpoint", () => {
+    // pages-basic's next.config.mjs pins the build id to "test-build-id".
+    const BUILD_ID = "test-build-id";
+
+    it("returns { pageProps } JSON for a getServerSideProps page", async () => {
+      const res = await fetch(`${prodUrl}/_next/data/${BUILD_ID}/ssr.json`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      const json = (await res.json()) as { pageProps: { message: string } };
+      expect(json.pageProps.message).toBe("Hello from getServerSideProps");
+    });
+
+    it("returns { pageProps } JSON for a getStaticProps page (bypasses HTML cache)", async () => {
+      // /isr-test uses getStaticProps with revalidate. The data endpoint
+      // must bypass the cached HTML body and surface pageProps as JSON —
+      // mirrors Next.js' `isNextDataRequest` cache-bypass logic in
+      // base-server.ts.
+      const res = await fetch(`${prodUrl}/_next/data/${BUILD_ID}/isr-test.json`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      const json = (await res.json()) as { pageProps: Record<string, unknown> };
+      expect(json).toHaveProperty("pageProps");
+      expect(typeof json.pageProps).toBe("object");
+    });
+
+    it("normalizes the URL to /<page> BEFORE middleware runs", async () => {
+      const res = await fetch(`${prodUrl}/_next/data/${BUILD_ID}/ssr.json`);
+      expect(res.status).toBe(200);
+      // The middleware fixture sets `x-mw-pathname` to whatever pathname it
+      // observed. If `_next/data` is not normalized first, middleware sees
+      // the raw `/_next/data/.../ssr.json` URL — which is the failure mode
+      // tracked in issue #1330 and surfaced by `middleware-general` tests
+      // in the deploy suite.
+      expect(res.headers.get("x-mw-pathname")).toBe("/ssr");
+      expect(res.headers.get("x-custom-middleware")).toBe("active");
+    });
+
+    it("returns JSON 404 for an unknown page", async () => {
+      const res = await fetch(`${prodUrl}/_next/data/${BUILD_ID}/totally-missing-page.json`);
+      expect(res.status).toBe(404);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      expect(await res.json()).toEqual({});
+    });
+
+    it("returns JSON 404 for a stale buildId", async () => {
+      const res = await fetch(`${prodUrl}/_next/data/wrong-build-id/ssr.json`);
+      expect(res.status).toBe(404);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      expect(await res.json()).toEqual({});
+    });
   });
 });
 

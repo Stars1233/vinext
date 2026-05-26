@@ -255,6 +255,7 @@ const i18nConfig = ${i18nConfigJson};
 // match _next/data requests against the embedded buildId without needing
 // to load next.config.js at runtime.
 export const buildId = ${buildIdJson};
+const __hasMiddleware = ${JSON.stringify(Boolean(middlewarePath))};
 
 // Full resolved config for production server (embedded at build time)
 export const vinextConfig = ${vinextConfigJson};
@@ -690,6 +691,7 @@ async function _renderPage(request, url, manifest, middlewareHeaders, options) {
         safeJsonStringify,
         sanitizeDestination: sanitizeDestinationLocal,
         scriptNonce,
+        vinext: { hasMiddleware: __hasMiddleware },
         triggerBackgroundRegeneration,
       });
       if (pageDataResult.kind === "response") {
@@ -829,6 +831,7 @@ async function _renderPage(request, url, manifest, middlewareHeaders, options) {
         routeUrl,
         safeJsonStringify,
         scriptNonce,
+        vinext: { hasMiddleware: __hasMiddleware },
       });
     } catch (e) {
       console.error("[vinext] SSR error:", e);

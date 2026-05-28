@@ -1179,6 +1179,42 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         // See: https://github.com/vercel/next.js/pull/93997
         defines["process.env.__NEXT_APP_SHELLS"] = JSON.stringify(false);
 
+        // User-defined compile-time constants from `compiler.define` in
+        // next.config. Applied to BOTH client and server bundles via Vite's
+        // top-level `define`. Values are already JSON-stringified by
+        // resolveNextConfig (matching Webpack DefinePlugin semantics).
+        // Server-only `compiler.defineServer` entries are layered in below
+        // via `configEnvironment` so they never leak into the client bundle.
+        //
+        // Parity with Next.js: collide against any internal define (e.g.
+        // `process.env.NODE_ENV`, `process.env.__NEXT_*`, `__VINEXT_*`) and
+        // throw, instead of silently overwriting. Mirrors the check in
+        // packages/next/src/build/define-env.ts.
+        // See: https://nextjs.org/docs/app/api-reference/config/next-config-js/compiler#define
+        for (const [key, value] of Object.entries(nextConfig.compilerDefine)) {
+          if (key in defines) {
+            throw new Error(
+              `The \`compiler.define\` option is configured to replace the \`${key}\` variable. ` +
+                `This variable is either part of a built-in or is already configured.`,
+            );
+          }
+          defines[key] = value;
+        }
+        // `compiler.defineServer` is applied per-environment below, but we
+        // still validate collisions here against (a) vinext's internal
+        // defines and (b) the user's own `compiler.define` map — Next.js
+        // rejects both cases. Doing the check eagerly keeps the failure
+        // mode predictable: misconfigured projects fail at config resolution
+        // instead of producing subtly wrong output.
+        for (const key of Object.keys(nextConfig.compilerDefineServer)) {
+          if (key in defines) {
+            throw new Error(
+              `The \`compiler.defineServer\` option is configured to replace the \`${key}\` variable. ` +
+                `This variable is either part of a built-in or is already configured.`,
+            );
+          }
+        }
+
         // Build the shim alias map. Exact `.js` variants are included for the
         // public Next entrypoints that are file-backed in `next/package.json`.
         // Some libraries (for example `nuqs`) import `next/navigation.js`
@@ -3476,6 +3512,32 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           if (!result) return null;
           return { code: result, map: null };
         },
+      },
+    },
+    // Inject `compiler.defineServer` substitutions into server environments
+    // only. The universal `compiler.define` map is already merged into the
+    // top-level Vite `define` config above, so it applies to both client
+    // and server bundles. `defineServer` MUST NOT leak into the browser
+    // bundle (it can contain secrets), so we layer it in via the
+    // per-environment `define` hook, which Vite merges over the top-level
+    // value for that environment only.
+    //
+    // Mirrors Next.js: packages/next/src/build/define-env.ts — the
+    // `defineServer` entries are only added to the `nodejs` / `edge`
+    // serialized define environments, never to `client`.
+    //
+    // Returning `null`/`undefined` means "no change"; the explicit empty
+    // check keeps the hook a no-op when the user never configured it.
+    {
+      name: "vinext:compiler-define-server",
+      configEnvironment(name) {
+        if (Object.keys(nextConfig.compilerDefineServer).length === 0) return null;
+        // The client environment is never given the server-only defines.
+        // All other environments (rsc, ssr, custom worker envs, etc.) are
+        // server-side per Vite's `consumer: "server"` default and receive
+        // the substitutions.
+        if (name === "client") return null;
+        return { define: { ...nextConfig.compilerDefineServer } };
       },
     },
     // Local image import transform:

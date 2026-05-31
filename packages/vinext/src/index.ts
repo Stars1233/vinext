@@ -87,7 +87,7 @@ import {
 import { scanMetadataFiles } from "./server/metadata-routes.js";
 import { buildRequestHeadersFromMiddlewareResponse } from "./server/middleware-request-headers.js";
 import { detectPackageManager } from "./utils/project.js";
-import { manifestFileWithBase, manifestFilesWithBase } from "./utils/manifest-paths.js";
+import { manifestFilesWithBase } from "./utils/manifest-paths.js";
 import { hasBasePath } from "./utils/base-path.js";
 import { mergeRewriteQuery } from "./utils/query.js";
 import {
@@ -124,6 +124,7 @@ import {
 } from "./plugins/fonts.js";
 import { hasWranglerConfig, formatMissingCloudflarePluginError } from "./deploy.js";
 import { computeLazyChunks } from "./utils/lazy-chunks.js";
+import { findClientEntryFile, readClientBuildManifest } from "./utils/client-build-manifest.js";
 import { resolvePostcssStringPlugins } from "./plugins/postcss.js";
 import { buildSassPreprocessorOptions } from "./plugins/sass.js";
 import {
@@ -142,6 +143,7 @@ import {
 } from "./build/ssr-manifest.js";
 import { stripServerExports } from "./plugins/strip-server-exports.js";
 import { removeConsoleCalls } from "./plugins/remove-console.js";
+import { createImportMetaUrlPlugin } from "./plugins/import-meta-url.js";
 import { hasMdxFiles } from "./utils/mdx-scan.js";
 import { scanPublicFileRoutes } from "./utils/public-routes.js";
 import tsconfigPaths from "vite-tsconfig-paths";
@@ -4005,6 +4007,9 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         },
       },
     },
+    createImportMetaUrlPlugin({
+      getRoot: () => root,
+    }),
     // Inline binary assets fetched via `fetch(new URL("./asset", import.meta.url))` —
     // see src/plugins/og-assets.ts
     createOgInlineFetchAssetsPlugin(),
@@ -4358,21 +4363,17 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
           let lazyChunksData: string[] | null = null;
           let clientEntryFile: string | null = null;
           const buildManifestPath = path.join(clientDir, ".vite", "manifest.json");
-          if (fs.existsSync(buildManifestPath)) {
-            try {
-              const buildManifest = JSON.parse(fs.readFileSync(buildManifestPath, "utf-8"));
-              // oxlint-disable-next-line typescript/no-explicit-any
-              for (const [, value] of Object.entries(buildManifest) as [string, any][]) {
-                if (value && value.isEntry && value.file) {
-                  clientEntryFile = manifestFileWithBase(value.file, clientBase);
-                  break;
-                }
-              }
-              const lazy = manifestFilesWithBase(computeLazyChunks(buildManifest), clientBase);
-              if (lazy.length > 0) lazyChunksData = lazy;
-            } catch {
-              /* ignore parse errors */
-            }
+          const buildManifest = readClientBuildManifest(buildManifestPath);
+          if (buildManifest) {
+            clientEntryFile =
+              findClientEntryFile({
+                buildManifest,
+                clientDir,
+                assetsSubdir: resolveAssetsDir(nextConfig?.assetPrefix),
+                assetBase: clientBase,
+              }) ?? null;
+            const lazy = manifestFilesWithBase(computeLazyChunks(buildManifest), clientBase);
+            if (lazy.length > 0) lazyChunksData = lazy;
           }
 
           // Read SSR manifest for per-page CSS/JS injection
@@ -4439,18 +4440,12 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
             // and the prod-server lookup path, so this fallback works for every
             // layout supported by the rest of the pipeline.
             if (!clientEntryFile) {
-              const assetsSubdir = resolveAssetsDir(nextConfig?.assetPrefix);
-              const assetsDir = path.join(clientDir, assetsSubdir);
-              if (fs.existsSync(assetsDir)) {
-                const files = fs.readdirSync(assetsDir);
-                const entry = files.find(
-                  (f: string) =>
-                    (f.includes("vinext-client-entry") || f.includes("vinext-app-browser-entry")) &&
-                    f.endsWith(".js"),
-                );
-                if (entry)
-                  clientEntryFile = manifestFileWithBase(`${assetsSubdir}/${entry}`, clientBase);
-              }
+              clientEntryFile =
+                findClientEntryFile({
+                  clientDir,
+                  assetsSubdir: resolveAssetsDir(nextConfig?.assetPrefix),
+                  assetBase: clientBase,
+                }) ?? null;
             }
 
             // Prepend globals to worker entry

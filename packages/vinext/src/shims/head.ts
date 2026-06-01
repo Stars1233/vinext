@@ -19,7 +19,8 @@ type HeadProps = {
 
 let _ssrHeadChildren: React.ReactNode[] = [];
 let _documentInitialHead: React.ReactNode[] = [];
-const _clientHeadChildren = new Map<symbol, React.ReactNode>();
+/** @internal — exposed for unit tests of the client head projection. */
+export const _clientHeadChildren = new Map<symbol, React.ReactNode>();
 
 let _getSSRHeadChildren = (): React.ReactNode[] => _ssrHeadChildren;
 let _resetSSRHeadImpl = (): void => {
@@ -416,18 +417,84 @@ export function _applyHeadPropsToElement(
   }
 }
 
-function syncClientHead(): void {
-  document.querySelectorAll("[data-next-head]").forEach((el) => el.remove());
+/**
+ * Reconcile the document <head> against the desired projection.
+ *
+ * Mirrors Next.js's client `head-manager.ts` `updateElements()`: rather than
+ * wiping every [data-next-head] node and re-appending (which reorders the
+ * SSR-emitted tags to the end of <head> and causes flicker on each update),
+ * we diff the desired tags against the existing ones with isEqualNode(). Tags
+ * that already match are left untouched in their original DOM position, only
+ * genuinely new tags are inserted, and stale tags are removed.
+ *
+ * The desired list seeds defaultHead() (charset + viewport) ahead of user
+ * tags — matching the SSR path in getSSRHeadHTML() and Next.js's
+ * reduceComponents(), which always concatenates defaultHead() on both server
+ * and client. Without it the first <Head> mount after hydration would drop the
+ * server-rendered defaults. Users can still override via key="charset" /
+ * key="viewport" through the dedupe pipeline.
+ *
+ * @internal — exported for unit tests; called from the Head client effect.
+ */
+export function _syncClientHead(): void {
+  const headEl = document.head;
+  if (!headEl) return;
 
-  for (const child of reduceHeadChildren([..._clientHeadChildren.values()])) {
+  // Existing vinext-managed tags. Also fold in any <meta charset> even if it
+  // somehow lost the marker, so we never end up with a duplicate charset.
+  const oldTags = new Set<Element>(headEl.querySelectorAll("[data-next-head]"));
+  const charsetEl = headEl.querySelector("meta[charset]");
+  if (charsetEl) oldTags.add(charsetEl);
+
+  const newTags: Element[] = [];
+  for (const child of reduceHeadChildren([...defaultHead(), ..._clientHeadChildren.values()])) {
     if (typeof child.type !== "string") continue;
 
     const domEl = document.createElement(child.type);
-    const props = child.props as Record<string, unknown>;
-    _applyHeadPropsToElement(domEl, props);
-
+    _applyHeadPropsToElement(domEl, child.props as Record<string, unknown>);
     domEl.setAttribute("data-next-head", "");
-    document.head.appendChild(domEl);
+
+    // Reuse an identical node already in <head> so its DOM position (and thus
+    // the head ordering produced by SSR) is preserved.
+    //
+    // Note: Next.js routes <title> through document.title rather than
+    // updateElements(), so a title node never moves. We reconcile <title> like
+    // any other tag — on hydration with an unchanged title it is reused in
+    // place via isEqualNode (the common case), and only on a client-side title
+    // *change* does the old node get removed and the new one appended. The
+    // position of <title> in <head> is not observable, so this is cosmetic.
+    let isNew = true;
+    for (const oldTag of oldTags) {
+      if (oldTag.isEqualNode(domEl)) {
+        oldTags.delete(oldTag);
+        isNew = false;
+        break;
+      }
+    }
+    if (isNew) newTags.push(domEl);
+  }
+
+  // Remove tags that are no longer desired.
+  for (const oldTag of oldTags) {
+    oldTag.parentNode?.removeChild(oldTag);
+  }
+
+  // Insert genuinely new tags. Keep <meta charset> first in <head> so the
+  // declared encoding stays at the top.
+  //
+  // This deliberately diverges from Next.js's literal head-manager.ts, which
+  // does `if (charset) headEl.prepend(newTag)` with NO `else` and then
+  // unconditionally `headEl.appendChild(newTag)` — moving a newly-created
+  // charset node twice and landing it last. We use a proper if/else so a new
+  // charset is prepended and only prepended. Don't "fix" this back to match
+  // Next.js's sequence. (This branch only runs on client-only navigation; on
+  // SSR hydration the charset is reused in place via isEqualNode above.)
+  for (const newTag of newTags) {
+    if (newTag.tagName.toLowerCase() === "meta" && newTag.getAttribute("charset") !== null) {
+      headEl.prepend(newTag);
+    } else {
+      headEl.appendChild(newTag);
+    }
   }
 }
 
@@ -450,11 +517,11 @@ function Head({ children }: HeadProps): null {
   useEffect(() => {
     const instanceId = headInstanceIdRef.current!;
     _clientHeadChildren.set(instanceId, children);
-    syncClientHead();
+    _syncClientHead();
 
     return () => {
       _clientHeadChildren.delete(instanceId);
-      syncClientHead();
+      _syncClientHead();
     };
   }, [children]);
 

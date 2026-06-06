@@ -647,6 +647,7 @@ export default __createAppRscHandler({
       hasPageDefaultExport: !!PageComponent,
       hasPageModule: !!route.page,
       handlerStart,
+      htmlLimitedBots: __htmlLimitedBots,
       interceptionContext,
       expireSeconds: __expireTime,
       formState,

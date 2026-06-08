@@ -6566,6 +6566,7 @@ describe("double-encoded path handling in middleware", () => {
         unauthorizedPaths: [],
         unauthorizedPath: null,
         parallelSlots: [],
+        siblingIntercepts: [],
       },
     ]);
     expect(code).toContain("createAppRscRouteMatcher as __createAppRscRouteMatcher");

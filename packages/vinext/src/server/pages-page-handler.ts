@@ -44,6 +44,7 @@ import { createRequestContext, runWithRequestContext } from "vinext/shims/unifie
 import { getRequestExecutionContext } from "vinext/shims/request-context";
 import { ensureFetchPatch } from "vinext/shims/fetch-cache";
 import { collectAssetTags, resolveClientModuleUrl } from "./pages-asset-tags.js";
+import { NEXTJS_DEPLOYMENT_ID_HEADER } from "./headers.js";
 import { ISR_NEVER_CACHE_CONTROL } from "./isr-decision.js";
 
 // ---------------------------------------------------------------------------
@@ -501,6 +502,7 @@ export function createPagesPageHandler(
           err,
           applyRequestContexts: applySSRContext,
           buildId,
+          deploymentId: process.env.__VINEXT_DEPLOYMENT_ID || process.env.NEXT_DEPLOYMENT_ID,
           createGsspReqRes() {
             return createPagesReqRes({ body: undefined, query, request, url: routeUrl });
           },
@@ -622,6 +624,18 @@ export function createPagesPageHandler(
             }
             if (!hasUserCacheControl) {
               init.headers["Cache-Control"] = ISR_NEVER_CACHE_CONTROL;
+            }
+          }
+          // Mirror Next.js pages-handler.ts: set x-nextjs-deployment-id on
+          // every _next/data response so the client router can detect a new
+          // deployment and trigger a hard navigation (deployment-skew
+          // protection). Next.js skips the success path for /_error and /500
+          // (`!isErrorPage && !is500Page`). Fixes #1829.
+          if (routePattern !== "/_error" && routePattern !== "/500") {
+            const deploymentId =
+              process.env.__VINEXT_DEPLOYMENT_ID || process.env.NEXT_DEPLOYMENT_ID;
+            if (deploymentId) {
+              init.headers[NEXTJS_DEPLOYMENT_ID_HEADER] = deploymentId;
             }
           }
           return buildNextDataJsonResponse(pageProps, safeJsonStringify, init);

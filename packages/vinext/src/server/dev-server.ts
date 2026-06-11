@@ -7,6 +7,7 @@ import type { ModuleImporter } from "./instrumentation.js";
 import { importModule, reportRequestError } from "./instrumentation.js";
 import type { NextI18nConfig } from "../config/next-config.js";
 import { buildCacheStateHeaders } from "./cache-headers.js";
+import { NEXTJS_DEPLOYMENT_ID_HEADER } from "./headers.js";
 import {
   decideIsr,
   buildMissIsrCacheControl,
@@ -120,7 +121,14 @@ function writeGsspRedirect(
   }
 
   if (isDataReq) {
-    res.writeHead(200, { "Content-Type": "application/json" });
+    // Mirror Next.js pages-handler.ts: set x-nextjs-deployment-id on all
+    // `_next/data` redirect exits for deployment-skew protection. Fixes #1829.
+    const deploymentId = process.env.__VINEXT_DEPLOYMENT_ID || process.env.NEXT_DEPLOYMENT_ID;
+    const dataHeaders: Record<string, string> = { "Content-Type": "application/json" };
+    if (deploymentId) {
+      dataHeaders[NEXTJS_DEPLOYMENT_ID_HEADER] = deploymentId;
+    }
+    res.writeHead(200, dataHeaders);
     res.end(JSON.stringify({ pageProps: { __N_REDIRECT: dest, __N_REDIRECT_STATUS: status } }));
     return;
   }
@@ -510,7 +518,12 @@ export function createSSRHandler(
       if (isDataReq) {
         // Stale client requested data for a page that no longer exists.
         // Emit a JSON 404 so the client hard-navigates (matches Next.js).
-        res.writeHead(404, { "Content-Type": "application/json" });
+        // Mirror Next.js pages-handler.ts: set x-nextjs-deployment-id on
+        // `_next/data` notFound exits for deployment-skew protection. Fixes #1829.
+        const deploymentId = process.env.__VINEXT_DEPLOYMENT_ID || process.env.NEXT_DEPLOYMENT_ID;
+        const notFoundHeaders: Record<string, string> = { "Content-Type": "application/json" };
+        if (deploymentId) notFoundHeaders[NEXTJS_DEPLOYMENT_ID_HEADER] = deploymentId;
+        res.writeHead(404, notFoundHeaders);
         res.end("{}");
         return;
       }
@@ -698,7 +711,15 @@ export function createSSRHandler(
             if (isDataReq) {
               // Data requests get a JSON 404 so the client router can
               // hard-navigate instead of trying to parse HTML as JSON.
-              res.writeHead(404, { "Content-Type": "application/json" });
+              // Mirror Next.js pages-handler.ts: set x-nextjs-deployment-id on
+              // `_next/data` notFound exits for deployment-skew protection. Fixes #1829.
+              const deploymentId =
+                process.env.__VINEXT_DEPLOYMENT_ID || process.env.NEXT_DEPLOYMENT_ID;
+              const notFoundHeaders: Record<string, string> = {
+                "Content-Type": "application/json",
+              };
+              if (deploymentId) notFoundHeaders[NEXTJS_DEPLOYMENT_ID_HEADER] = deploymentId;
+              res.writeHead(404, notFoundHeaders);
               res.end("{}");
               return;
             }
@@ -781,7 +802,15 @@ export function createSSRHandler(
           }
           if (result && "notFound" in result && result.notFound) {
             if (isDataReq) {
-              res.writeHead(404, { "Content-Type": "application/json" });
+              // Mirror Next.js pages-handler.ts: set x-nextjs-deployment-id on
+              // `_next/data` notFound exits for deployment-skew protection. Fixes #1829.
+              const deploymentId =
+                process.env.__VINEXT_DEPLOYMENT_ID || process.env.NEXT_DEPLOYMENT_ID;
+              const notFoundHeaders: Record<string, string> = {
+                "Content-Type": "application/json",
+              };
+              if (deploymentId) notFoundHeaders[NEXTJS_DEPLOYMENT_ID_HEADER] = deploymentId;
+              res.writeHead(404, notFoundHeaders);
               res.end("{}");
               return;
             }
@@ -1113,7 +1142,15 @@ export function createSSRHandler(
           }
           if (result && "notFound" in result && result.notFound) {
             if (isDataReq) {
-              res.writeHead(404, { "Content-Type": "application/json" });
+              // Mirror Next.js pages-handler.ts: set x-nextjs-deployment-id on
+              // `_next/data` notFound exits for deployment-skew protection. Fixes #1829.
+              const deploymentId =
+                process.env.__VINEXT_DEPLOYMENT_ID || process.env.NEXT_DEPLOYMENT_ID;
+              const notFoundHeaders: Record<string, string> = {
+                "Content-Type": "application/json",
+              };
+              if (deploymentId) notFoundHeaders[NEXTJS_DEPLOYMENT_ID_HEADER] = deploymentId;
+              res.writeHead(404, notFoundHeaders);
               res.end("{}");
               return;
             }
@@ -1183,6 +1220,19 @@ export function createSSRHandler(
           if (gsspExtraHeaders) {
             for (const [k, v] of Object.entries(gsspExtraHeaders)) {
               dataHeaders[k] = v;
+            }
+          }
+          // Mirror Next.js pages-handler.ts: set x-nextjs-deployment-id on
+          // every _next/data response so the client router can detect a new
+          // deployment and trigger a hard navigation (deployment-skew
+          // protection). Next.js skips the success path for /_error and /500
+          // (`!isErrorPage && !is500Page`). Fixes #1829.
+          const dataRoutePattern = patternToNextFormat(route.pattern);
+          if (dataRoutePattern !== "/_error" && dataRoutePattern !== "/500") {
+            const deploymentId =
+              process.env.__VINEXT_DEPLOYMENT_ID || process.env.NEXT_DEPLOYMENT_ID;
+            if (deploymentId) {
+              dataHeaders[NEXTJS_DEPLOYMENT_ID_HEADER] = deploymentId;
             }
           }
           res.writeHead(statusCode ?? 200, dataHeaders);

@@ -329,6 +329,74 @@ describe("next/navigation shim", () => {
     }
   });
 
+  it("attaches experimental_gesturePush only when the gesture transition define is set", async () => {
+    // In real builds `process.env.__NEXT_GESTURE_TRANSITION` is replaced with a
+    // boolean literal by the define in packages/vinext/src/index.ts; in vitest
+    // it reads the live env, so stub it and re-import the shim to exercise both
+    // sides of the gate.
+    try {
+      vi.stubEnv("__NEXT_GESTURE_TRANSITION", "");
+      vi.resetModules();
+      const { appRouterInstance: withoutDefine } =
+        await import("../packages/vinext/src/shims/navigation.js");
+      expect(typeof withoutDefine.experimental_gesturePush).toBe("undefined");
+
+      vi.stubEnv("__NEXT_GESTURE_TRANSITION", "true");
+      vi.resetModules();
+      const { appRouterInstance: withDefine } =
+        await import("../packages/vinext/src/shims/navigation.js");
+      expect(typeof withDefine.experimental_gesturePush).toBe("function");
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  // Next.js parity: upstream's gesturePush early-returns when
+  // `getCurrentAppRouterState() === null` — a gesture dispatched before
+  // hydration is a no-op. Without the guard, navigateClientSide's non-runtime
+  // fallback would perform a real history push instead.
+  it("experimental_gesturePush is a no-op before the navigation runtime is ready", async () => {
+    const previousWindow = (globalThis as any).window;
+    const historyCalls: string[] = [];
+    const win = {
+      location: { href: "http://localhost/current", origin: "http://localhost" },
+      history: {
+        state: null,
+        pushState: () => {
+          historyCalls.push("push");
+        },
+        replaceState: () => {
+          historyCalls.push("replace");
+        },
+      },
+      addEventListener: () => {},
+      // No Symbol.for("vinext.navigationRuntime") entry: pre-hydration state.
+    };
+    (globalThis as any).window = win;
+
+    try {
+      vi.stubEnv("__NEXT_GESTURE_TRANSITION", "true");
+      vi.resetModules();
+      const { appRouterInstance } = await import("../packages/vinext/src/shims/navigation.js");
+      if (!appRouterInstance.experimental_gesturePush) {
+        throw new Error("Expected experimental_gesturePush to be attached");
+      }
+      appRouterInstance.experimental_gesturePush("/next-page");
+      // navigateClientSide is async; flush microtasks so a (buggy) fallthrough
+      // into its history-push branch would be observable.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(historyCalls).toEqual([]);
+      expect(win.location.href).toBe("http://localhost/current");
+    } finally {
+      (globalThis as any).window = previousWindow;
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
   it("hash-only app router navigation preserves bfcache metadata without copying scroll restoration", async () => {
     const previousWindow = (globalThis as any).window;
     const previousDocument = (globalThis as any).document;

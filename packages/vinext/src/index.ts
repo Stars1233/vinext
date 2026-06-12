@@ -1321,6 +1321,14 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         defines["process.env.__VINEXT_PREFETCH_INLINING"] = JSON.stringify(
           nextConfig.prefetchInlining ? "true" : "false",
         );
+        // Emit a raw boolean (not the "true"/"false" string form used by the
+        // sibling defines above): the consumer guards with
+        // `if (process.env.__NEXT_GESTURE_TRANSITION)`, so the literal `false`
+        // tree-shakes the gesture method away when disabled, whereas the
+        // string "false" would be truthy. Matches Next.js define-env.ts.
+        defines["process.env.__NEXT_GESTURE_TRANSITION"] = JSON.stringify(
+          nextConfig.gestureTransition,
+        );
         // Expose trailingSlash to client-side code so <Link> can render hrefs
         // in the canonical form and avoid an unnecessary 308 redirect bounce.
         defines["process.env.__VINEXT_TRAILING_SLASH"] = JSON.stringify(

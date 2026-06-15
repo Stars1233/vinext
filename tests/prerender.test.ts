@@ -863,6 +863,22 @@ describe("prerenderApp — default mode (app-basic)", () => {
     }
   });
 
+  it("dedups duplicate generateStaticParams entries (renders /dedup-params/:slug once each)", () => {
+    // generateStaticParams returns [{slug:'alpha'},{slug:'alpha'},{slug:'beta'}].
+    // The duplicate 'alpha' must collapse to a single rendered route / manifest
+    // entry, matching Next.js' filterUniqueParams. See issue #1983.
+    const alpha = results.filter((r) => "path" in r && r.path === "/dedup-params/alpha");
+    expect(alpha).toHaveLength(1);
+    expect(alpha[0]).toMatchObject({
+      route: "/dedup-params/:slug",
+      path: "/dedup-params/alpha",
+      status: "rendered",
+    });
+
+    const beta = results.filter((r) => "path" in r && r.path === "/dedup-params/beta");
+    expect(beta).toHaveLength(1);
+  });
+
   it("skips dynamic routes without generateStaticParams", () => {
     // /photos/[id] has no generateStaticParams
     const r = results.find(

@@ -1,5 +1,13 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -267,6 +275,7 @@ describe("paired performance benchmarks", () => {
 
   it("measures the eager RSC entry closure and complete server bundle separately", () => {
     const directory = mkdtempSync(join(tmpdir(), "vinext-perf-server-bundle-"));
+    const repositoryRoot = join(import.meta.dirname, "..");
     const serverDirectory = join(directory, "benchmarks/vinext/dist/server");
     const samplesPath = join(directory, "samples.jsonl");
     const rscEntry =
@@ -277,6 +286,8 @@ describe("paired performance benchmarks", () => {
     const lazyChunk = "export const lazy = 'lazy';";
     mkdirSync(join(serverDirectory, "ssr"), { recursive: true });
     mkdirSync(join(serverDirectory, "_next/static"), { recursive: true });
+    writeFileSync(join(directory, "package.json"), '{"private":true}');
+    symlinkSync(join(repositoryRoot, "node_modules"), join(directory, "node_modules"), "dir");
     writeFileSync(join(serverDirectory, "index.js"), rscEntry);
     writeFileSync(join(serverDirectory, "ssr/index.js"), ssrEntry);
     writeFileSync(join(serverDirectory, "_next/static/shared.js"), sharedChunk);
@@ -319,6 +330,52 @@ describe("paired performance benchmarks", () => {
         gzipSync(reexportedChunk).length +
         gzipSync(lazyChunk).length,
     ]);
+  });
+
+  it("resolves Vite from the benchmark target when the trusted harness is relocated", () => {
+    const directory = mkdtempSync(join(tmpdir(), "vinext-perf-relocated-harness-"));
+    const repositoryRoot = join(import.meta.dirname, "..");
+    const targetRoot = join(directory, "target");
+    const harnessRoot = join(directory, "harness");
+    const serverDirectory = join(targetRoot, "benchmarks/vinext/dist/server");
+    const samplesPath = join(directory, "samples.jsonl");
+
+    mkdirSync(serverDirectory, { recursive: true });
+    mkdirSync(harnessRoot, { recursive: true });
+    cpSync(join(repositoryRoot, "benchmarks/perf"), join(harnessRoot, "benchmarks/perf"), {
+      recursive: true,
+    });
+    writeFileSync(join(targetRoot, "package.json"), '{"private":true}');
+    symlinkSync(join(repositoryRoot, "node_modules"), join(targetRoot, "node_modules"), "dir");
+    writeFileSync(join(serverDirectory, "index.js"), "import './shared.js';");
+    writeFileSync(join(serverDirectory, "shared.js"), "export const shared = true;");
+
+    execFileSync(
+      process.execPath,
+      [join(harnessRoot, "benchmarks/perf/bundle-size.mjs"), "vinext", "rsc-entry"],
+      {
+        cwd: harnessRoot,
+        env: {
+          ...process.env,
+          VINEXT_PERF_TARGET_ROOT: targetRoot,
+          VINEXT_PERF_SAMPLES: samplesPath,
+          VINEXT_PERF_SCENARIO_ID: "bundle-size",
+          VINEXT_PERF_SUITE: "Build",
+          VINEXT_PERF_BENCHMARK_ID: "vinext-rsc-entry-gzip",
+          VINEXT_PERF_LABEL: "RSC entry",
+          VINEXT_PERF_IMPLEMENTATION_ID: "vinext",
+          VINEXT_PERF_IMPLEMENTATION_LABEL: "vinext",
+          VINEXT_PERF_UNIT: "bytes",
+          VINEXT_PERF_LOWER_IS_BETTER: "true",
+          VINEXT_PERF_REVISION: "head",
+        },
+      },
+    );
+
+    const sample = JSON.parse(readFileSync(samplesPath, "utf8"));
+    expect(sample.value).toBe(
+      gzipSync("import './shared.js';").length + gzipSync("export const shared = true;").length,
+    );
   });
 
   it("measures only the eager client entry closure", () => {

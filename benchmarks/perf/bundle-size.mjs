@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
 import { lstat, readdir, readFile, realpath } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
-import { parseAst } from "vite";
 import { reportPerformanceSample } from "./report-sample.mjs";
 
 const repositoryRoot = process.env.VINEXT_PERF_TARGET_ROOT ?? process.cwd();
@@ -111,6 +112,9 @@ async function gzipClientEntryClosure(clientOutputPath) {
 }
 
 async function gzipStaticEntryClosure(entryPath) {
+  const requireFromTarget = createRequire(join(repositoryRoot, "package.json"));
+  const vitePath = requireFromTarget.resolve("vite");
+  const { parseAst } = await import(pathToFileURL(vitePath).href);
   const outputDirectory = dirname(entryPath);
   const resolvedOutputDirectory = await realpath(outputDirectory);
   let gzipBytes = 0;

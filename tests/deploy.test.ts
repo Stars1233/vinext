@@ -299,7 +299,7 @@ describe("resolveWranglerBin", () => {
   });
 
   it("returns a clear fallback path when Wrangler is missing", () => {
-    expect(resolveWranglerBin(tmpDir)).toBe(
+    expect(resolveWranglerBin(tmpDir, () => null)).toBe(
       path.join(tmpDir, "node_modules", "wrangler", "bin", "wrangler.js"),
     );
   });

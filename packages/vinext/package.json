@@ -89,6 +89,10 @@
       "types": "./dist/build/run-prerender.d.ts",
       "import": "./dist/build/run-prerender.js"
     },
+    "./internal/build/prerender-paths": {
+      "types": "./dist/build/prerender-paths.d.ts",
+      "import": "./dist/build/prerender-paths.js"
+    },
     "./internal/cache-adapters": {
       "types": "./dist/cache/cache-adapters-virtual.d.ts",
       "import": "./dist/cache/cache-adapters-virtual.js"

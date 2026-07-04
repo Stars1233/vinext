@@ -417,7 +417,7 @@ async function runWithConcurrency<T, R>(
  * caller (prerenderPages / prerenderApp) catches this and surfaces it as a
  * per-route error result.
  */
-function buildUrlFromParams(
+export function buildUrlFromParams(
   pattern: string,
   params: Record<string, string | string[]> | undefined | null,
 ): string {

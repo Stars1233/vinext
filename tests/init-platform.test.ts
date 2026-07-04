@@ -7,10 +7,12 @@ import {
   parseCdnCacheArg,
   parseImageOptimizationArg,
   parsePrerenderArg,
+  parseWarmCdnCacheArg,
   resolveCloudflareInitOptions,
   resolveInitOptions,
   resolveInitPlatform,
   resolveInitPrerender,
+  resolveInitWarmCdnCache,
 } from "../packages/vinext/src/init-platform.js";
 
 describe("parsePlatformArg", () => {
@@ -221,6 +223,48 @@ describe("prerender init choice", () => {
   });
 });
 
+describe("warm CDN cache init choice", () => {
+  it("parses explicit warm CDN cache flags", () => {
+    expect(parseWarmCdnCacheArg(["--warm-cdn-cache"])).toBe(true);
+    expect(parseWarmCdnCacheArg(["--no-warm-cdn-cache"])).toBe(false);
+    expect(parseWarmCdnCacheArg(["--warm-cdn-cache=true"])).toBe(true);
+    expect(parseWarmCdnCacheArg(["--warm-cdn-cache=false"])).toBe(false);
+  });
+
+  it("rejects unsupported explicit values", () => {
+    expect(() => parseWarmCdnCacheArg(["--warm-cdn-cache=maybe"])).toThrow(
+      "--warm-cdn-cache expects true or false",
+    );
+  });
+
+  it("defaults non-interactive and agent environments to enabled", async () => {
+    await expect(resolveInitWarmCdnCache([], { env: {}, isInteractive: false })).resolves.toBe(
+      true,
+    );
+    await expect(
+      resolveInitWarmCdnCache([], { env: { CODEX_THREAD_ID: "test" }, isInteractive: true }),
+    ).resolves.toBe(true);
+  });
+
+  it("defaults the interactive prompt to Yes", async () => {
+    const prompts: string[] = [];
+    const output = new PassThrough();
+    await expect(
+      resolveInitWarmCdnCache([], {
+        env: {},
+        isInteractive: true,
+        output,
+        question: async (prompt) => {
+          prompts.push(prompt);
+          return "";
+        },
+      }),
+    ).resolves.toBe(true);
+    expect(prompts).toEqual(["  Pre-warm Workers Cache during deploy? [Y/n]: "]);
+    expect(output.read()?.toString()).toBe("\n");
+  });
+});
+
 describe("isAgentEnvironment", () => {
   it("detects agents supported by am-i-vibing", () => {
     expect(isAgentEnvironment({ CODEX_THREAD_ID: "test" })).toBe(true);
@@ -280,6 +324,19 @@ describe("resolveInitPlatform", () => {
 });
 
 describe("resolveInitOptions", () => {
+  it("defaults Cloudflare Workers Cache init to CDN pre-warming", async () => {
+    await expect(resolveInitOptions([], { env: {}, isInteractive: false })).resolves.toEqual({
+      platform: "cloudflare",
+      prerender: false,
+      cloudflare: {
+        dataCache: "kv",
+        cdnCache: "workers-cache",
+        imageOptimization: "cloudflare-images",
+        warmCdnCache: true,
+      },
+    });
+  });
+
   it("shares the full vinext init option selection flow", async () => {
     await expect(
       resolveInitOptions(
@@ -299,7 +356,88 @@ describe("resolveInitOptions", () => {
         dataCache: "none",
         cdnCache: "data-cache",
         imageOptimization: "none",
+        warmCdnCache: false,
       },
     });
+  });
+
+  it("asks whether to pre-warm Workers Cache after the prerender prompt", async () => {
+    const prompts: string[] = [];
+    const answers = ["", "", "", "n", ""];
+
+    await expect(
+      resolveInitOptions(["--platform=cloudflare"], {
+        env: {},
+        isInteractive: true,
+        question: async (prompt) => {
+          prompts.push(prompt);
+          return answers.shift() ?? "";
+        },
+      }),
+    ).resolves.toEqual({
+      platform: "cloudflare",
+      prerender: false,
+      cloudflare: {
+        dataCache: "kv",
+        cdnCache: "workers-cache",
+        imageOptimization: "cloudflare-images",
+        warmCdnCache: true,
+      },
+    });
+
+    expect(prompts).toEqual([
+      "  Choose a CDN cache:\n    1. Workers Cache (default)\n    2. Data cache\n  CDN cache [1]: ",
+      "  Choose a data cache:\n    1. Cloudflare KV (default)\n    2. None\n  Data cache [1]: ",
+      "  Choose image optimization:\n    1. Cloudflare Images (default)\n    2. None\n  Image optimization [1]: ",
+      "  Pre-render all static routes after build? [y/N]: ",
+      "  Pre-warm Workers Cache during deploy? [Y/n]: ",
+    ]);
+  });
+
+  it("does not ask about pre-warming when Data cache is selected for CDN cache", async () => {
+    const prompts: string[] = [];
+    const answers = ["2", "", "", ""];
+
+    await expect(
+      resolveInitOptions(["--platform=cloudflare"], {
+        env: {},
+        isInteractive: true,
+        question: async (prompt) => {
+          prompts.push(prompt);
+          return answers.shift() ?? "";
+        },
+      }),
+    ).resolves.toEqual({
+      platform: "cloudflare",
+      prerender: false,
+      cloudflare: {
+        dataCache: "kv",
+        cdnCache: "data-cache",
+        imageOptimization: "cloudflare-images",
+        warmCdnCache: false,
+      },
+    });
+
+    expect(prompts).toEqual([
+      "  Choose a CDN cache:\n    1. Workers Cache (default)\n    2. Data cache\n  CDN cache [1]: ",
+      "  Choose a data cache:\n    1. Cloudflare KV (default)\n    2. None\n  Data cache [1]: ",
+      "  Choose image optimization:\n    1. Cloudflare Images (default)\n    2. None\n  Image optimization [1]: ",
+      "  Pre-render all static routes after build? [y/N]: ",
+    ]);
+  });
+
+  it("rejects warm CDN cache when Data cache is selected for CDN cache", async () => {
+    await expect(
+      resolveInitOptions(
+        [
+          "--platform=cloudflare",
+          "--cdn-cache=data-cache",
+          "--data-cache=kv",
+          "--image-optimization=none",
+          "--warm-cdn-cache",
+        ],
+        { env: {}, isInteractive: false },
+      ),
+    ).rejects.toThrow("--warm-cdn-cache requires --cdn-cache=workers-cache");
   });
 });

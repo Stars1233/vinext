@@ -11,7 +11,9 @@ import {
   buildWranglerKVBulkPutArgs,
   buildWranglerInvocation,
   buildWranglerDeployArgs,
+  getZeroPercentStagingTraffic,
   parseDeployArgs,
+  resolveWorkerNameForVersionOverride,
   resolveWranglerBin,
   runWranglerKVBulkPut,
   runWranglerDeploy,
@@ -59,7 +61,7 @@ import {
   mergeHeaders,
   resolveStaticAssetSignal,
 } from "../packages/vinext/src/server/worker-utils.js";
-import { domainCandidates, parseWranglerConfig } from "../packages/cloudflare/src/tpr.js";
+import { domainCandidates, parseWranglerConfig, runTPR } from "../packages/cloudflare/src/tpr.js";
 
 // ─── Test Helpers ────────────────────────────────────────────────────────────
 
@@ -152,6 +154,20 @@ describe("buildWranglerDeployArgs", () => {
     expect(buildWranglerDeployArgs({ env: "staging" })).toEqual({
       args: ["deploy", "--env", "staging"],
       env: "staging",
+    });
+  });
+
+  it("passes through explicit Worker names", () => {
+    expect(buildWranglerDeployArgs({ name: "custom-worker", env: "staging" })).toEqual({
+      args: ["deploy", "--name", "custom-worker", "--env", "staging"],
+      env: "staging",
+    });
+  });
+
+  it("passes through explicit Wrangler config paths", () => {
+    expect(buildWranglerDeployArgs({ config: "dist/server/wrangler.json" })).toEqual({
+      args: ["deploy", "--config", "dist/server/wrangler.json"],
+      env: undefined,
     });
   });
 
@@ -606,6 +622,8 @@ describe("parseDeployArgs", () => {
     expect(parsed.name).toBeUndefined();
     expect(parsed.skipBuild).toBe(false);
     expect(parsed.dryRun).toBe(false);
+    expect(parsed.warmCdnCache).toBe(false);
+    expect(parsed.warmCdnStrict).toBe(false);
   });
 
   it("parses --env with space-separated value", () => {
@@ -622,6 +640,12 @@ describe("parseDeployArgs", () => {
 
   it("parses --name=value form", () => {
     expect(parseDeployArgs(["--name=my-app"]).name).toBe("my-app");
+  });
+
+  it("parses --config with space-separated value", () => {
+    expect(parseDeployArgs(["--config", "dist/server/wrangler.json"]).config).toBe(
+      "dist/server/wrangler.json",
+    );
   });
 
   it("parses boolean flags", () => {
@@ -668,6 +692,35 @@ describe("parseDeployArgs", () => {
   it("throws for zero --prerender-concurrency value", () => {
     expect(() => parseDeployArgs(["--prerender-concurrency=0"])).toThrow(
       '--prerender-concurrency expects a positive integer, but got "0".',
+    );
+  });
+
+  it("parses CDN warmup flags", () => {
+    const parsed = parseDeployArgs([
+      "--warm-cdn-cache",
+      "--warm-cdn-concurrency",
+      "6",
+      "--warm-cdn-timeout=1500",
+      "--warm-cdn-retries",
+      "0",
+      "--warm-cdn-strict",
+      "--warm-cdn-include-fallbacks",
+    ]);
+
+    expect(parsed.warmCdnCache).toBe(true);
+    expect(parsed.warmCdnConcurrency).toBe(6);
+    expect(parsed.warmCdnTimeout).toBe(1500);
+    expect(parsed.warmCdnRetries).toBe(0);
+    expect(parsed.warmCdnStrict).toBe(true);
+    expect(parsed.warmCdnIncludeFallbacks).toBe(true);
+  });
+
+  it("throws for invalid CDN warmup numeric flags", () => {
+    expect(() => parseDeployArgs(["--warm-cdn-concurrency=0"])).toThrow(
+      '--warm-cdn-concurrency expects a positive integer, but got "0".',
+    );
+    expect(() => parseDeployArgs(["--warm-cdn-retries=-1"])).toThrow(
+      '--warm-cdn-retries expects a non-negative integer, but got "-1".',
     );
   });
 
@@ -1350,6 +1403,7 @@ describe("readPagesRouterEntrySource", () => {
   it("exports internal deploy dependencies consumed by @vinext/cloudflare", () => {
     const exportsMap = readVinextPackageExports();
     expect(hasPackageExport(exportsMap, "./internal/build/run-prerender")).toBe(true);
+    expect(hasPackageExport(exportsMap, "./internal/build/prerender-paths")).toBe(true);
     expect(hasPackageExport(exportsMap, "./internal/config/dotenv")).toBe(true);
     expect(hasPackageExport(exportsMap, "./internal/config/next-config")).toBe(true);
     expect(hasPackageExport(exportsMap, "./internal/config/prerender")).toBe(true);
@@ -3034,6 +3088,77 @@ describe("domainCandidates", () => {
 // ─── parseWranglerConfig — TPR fields ────────────────────────────────────────
 
 describe("parseWranglerConfig — custom domain extraction", () => {
+  it("extracts Worker name", () => {
+    writeFile(tmpDir, "wrangler.jsonc", JSON.stringify({ name: "my-worker" }));
+    const config = parseWranglerConfig(tmpDir);
+    expect(config?.name).toBe("my-worker");
+  });
+
+  it("reads an explicit Wrangler config path", () => {
+    writeFile(tmpDir, "dist/server/wrangler.json", JSON.stringify({ name: "generated-worker" }));
+    const config = parseWranglerConfig(tmpDir, "dist/server/wrangler.json");
+    expect(config?.name).toBe("generated-worker");
+  });
+
+  it("uses an explicit Wrangler config path during TPR", async () => {
+    writeFile(tmpDir, "wrangler.jsonc", JSON.stringify({ name: "source-worker" }));
+    writeFile(
+      tmpDir,
+      "dist/server/wrangler.json",
+      JSON.stringify({
+        name: "generated-worker",
+        custom_domains: ["app.example.com"],
+      }),
+    );
+
+    const previousToken = process.env.CLOUDFLARE_API_TOKEN;
+    process.env.CLOUDFLARE_API_TOKEN = "token";
+    try {
+      const result = await runTPR({
+        root: tmpDir,
+        config: "dist/server/wrangler.json",
+        coverage: 90,
+        limit: 100,
+        window: 24,
+      });
+
+      expect(result.skipped).toBe("no VINEXT_KV_CACHE KV namespace configured");
+    } finally {
+      if (previousToken === undefined) delete process.env.CLOUDFLARE_API_TOKEN;
+      else process.env.CLOUDFLARE_API_TOKEN = previousToken;
+    }
+  });
+
+  it("parses JSONC comments and trailing commas", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      `{
+        // Wrangler accepts JSONC comments and trailing commas.
+        "name": "my-worker",
+        "custom_domains": ["app.example.com",],
+        "kv_namespaces": [
+          { "binding": "VINEXT_KV_CACHE", "id": "abc123", },
+        ],
+        "env": {
+          "staging": {
+            "name": "my-worker-staging",
+            "custom_domains": ["staging.example.com",],
+          },
+        },
+      }`,
+    );
+
+    const config = parseWranglerConfig(tmpDir);
+    expect(config?.name).toBe("my-worker");
+    expect(config?.customDomain).toBe("app.example.com");
+    expect(config?.kvNamespaceId).toBe("abc123");
+    expect(config?.env?.staging).toEqual({
+      name: "my-worker-staging",
+      customDomain: "staging.example.com",
+    });
+  });
+
   it("extracts custom domain from routes array (string form)", () => {
     writeFile(tmpDir, "wrangler.jsonc", JSON.stringify({ routes: ["example.co.uk/*"] }));
     const config = parseWranglerConfig(tmpDir);
@@ -3062,5 +3187,134 @@ describe("parseWranglerConfig — custom domain extraction", () => {
     );
     const config = parseWranglerConfig(tmpDir);
     expect(config?.kvNamespaceId).toBe("abc123");
+  });
+
+  it("extracts environment Worker names and custom domains", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      JSON.stringify({
+        name: "my-worker",
+        env: {
+          staging: {
+            name: "my-worker-staging-custom",
+            custom_domains: ["staging.example.com"],
+          },
+        },
+      }),
+    );
+
+    const config = parseWranglerConfig(tmpDir);
+    expect(config?.env?.staging).toEqual({
+      name: "my-worker-staging-custom",
+      customDomain: "staging.example.com",
+    });
+  });
+
+  it("extracts environment custom domains from TOML route arrays", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.toml",
+      `
+name = "my-worker"
+
+[env.staging]
+routes = ["staging.example.com/*"]
+`,
+    );
+
+    const config = parseWranglerConfig(tmpDir);
+    expect(config?.env?.staging?.customDomain).toBe("staging.example.com");
+  });
+
+  it("extracts environment custom domains from TOML route blocks", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.toml",
+      `
+name = "my-worker"
+
+[env.staging]
+name = "my-worker-staging"
+
+[[env.staging.routes]]
+pattern = "staging.example.com/*"
+`,
+    );
+
+    const config = parseWranglerConfig(tmpDir);
+    expect(config?.env?.staging).toEqual({
+      name: "my-worker-staging",
+      customDomain: "staging.example.com",
+    });
+  });
+});
+
+// ─── CDN warmup Worker version overrides ───────────────────────────────────
+
+describe("resolveWorkerNameForVersionOverride", () => {
+  it("uses the top-level Worker name for production", () => {
+    writeFile(tmpDir, "wrangler.jsonc", JSON.stringify({ name: "my-worker" }));
+    expect(resolveWorkerNameForVersionOverride(parseWranglerConfig(tmpDir), {})).toBe("my-worker");
+  });
+
+  it("uses the CLI Worker name exactly when provided", () => {
+    writeFile(tmpDir, "wrangler.jsonc", JSON.stringify({ name: "config-worker" }));
+    expect(
+      resolveWorkerNameForVersionOverride(parseWranglerConfig(tmpDir), {
+        name: "cli-worker",
+        env: "staging",
+      }),
+    ).toBe("cli-worker");
+  });
+
+  it("appends the target environment for Wrangler legacy environments", () => {
+    writeFile(tmpDir, "wrangler.jsonc", JSON.stringify({ name: "my-worker" }));
+    expect(
+      resolveWorkerNameForVersionOverride(parseWranglerConfig(tmpDir), { env: "staging" }),
+    ).toBe("my-worker-staging");
+  });
+
+  it("uses env-specific Worker names for Wrangler legacy environments", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      JSON.stringify({
+        name: "my-worker",
+        env: { staging: { name: "custom-staging-worker" } },
+      }),
+    );
+    expect(
+      resolveWorkerNameForVersionOverride(parseWranglerConfig(tmpDir), { env: "staging" }),
+    ).toBe("custom-staging-worker");
+  });
+
+  it("keeps the service name for Wrangler service environments", () => {
+    writeFile(
+      tmpDir,
+      "wrangler.jsonc",
+      JSON.stringify({
+        name: "my-worker",
+        legacy_env: false,
+        env: { staging: {} },
+      }),
+    );
+    expect(
+      resolveWorkerNameForVersionOverride(parseWranglerConfig(tmpDir), { env: "staging" }),
+    ).toBe("my-worker");
+  });
+});
+
+describe("getZeroPercentStagingTraffic", () => {
+  it("does not stage the uploaded version when it is already the current deployment", () => {
+    expect(
+      getZeroPercentStagingTraffic(
+        {
+          versions: [{ versionId: "22222222-2222-4222-8222-222222222222", percentage: 100 }],
+          output: "{}",
+        },
+        "22222222-2222-4222-8222-222222222222",
+      ),
+    ).toBeNull();
   });
 });

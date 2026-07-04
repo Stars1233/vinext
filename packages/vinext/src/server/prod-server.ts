@@ -216,6 +216,10 @@ export type ProdServerOptions = {
   host?: string;
   /** Path to the build output directory */
   outDir?: string;
+  /** Explicit App Router RSC entry path. Defaults to `<outDir>/server/index.js`. */
+  rscEntryPath?: string;
+  /** Explicit Pages Router server entry path. Defaults to `<outDir>/server/entry.js`. */
+  serverEntryPath?: string;
   /** Disable compression (default: false) */
   noCompression?: boolean;
   /**
@@ -975,6 +979,8 @@ export async function startProdServer(options: ProdServerOptions = {}) {
     port = process.env.PORT ? parseInt(process.env.PORT) : 3000,
     host = "0.0.0.0",
     outDir = path.resolve("dist"),
+    rscEntryPath: explicitRscEntryPath,
+    serverEntryPath: explicitServerEntryPath,
     noCompression = false,
     purpose,
     silent = false,
@@ -986,8 +992,12 @@ export async function startProdServer(options: ProdServerOptions = {}) {
   const clientDir = path.join(resolvedOutDir, "client");
 
   // Detect build type
-  const rscEntryPath = path.join(resolvedOutDir, "server", "index.js");
-  const serverEntryPath = path.join(resolvedOutDir, "server", "entry.js");
+  const rscEntryPath = explicitRscEntryPath
+    ? path.resolve(explicitRscEntryPath)
+    : path.join(resolvedOutDir, "server", "index.js");
+  const serverEntryPath = explicitServerEntryPath
+    ? path.resolve(explicitServerEntryPath)
+    : path.join(resolvedOutDir, "server", "entry.js");
   const isAppRouter = fs.existsSync(rscEntryPath);
 
   if (!isAppRouter && !fs.existsSync(serverEntryPath)) {

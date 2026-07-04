@@ -242,6 +242,7 @@ import {
 import {
   normalizeVinextPrerenderConfig,
   VINEXT_PRERENDER_CONFIG_PLUGIN_PROPERTY,
+  VINEXT_ROUTE_ROOT_CONFIG_PLUGIN_PROPERTY,
   type VinextPrerenderConfig,
 } from "./config/prerender.js";
 
@@ -1301,7 +1302,6 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
   let pagesClientAssetsModule: string | null = null;
   let rscCompatibilityId: string | undefined;
   const draftModeSecret = randomUUID();
-
   // Per-plugin-instance binding of the Sass-aware CSS Modules Loader. The
   // `config` hook injects `Loader` as `css.modules.Loader` and
   // `configResolved` binds the resolved config, so multiple vinext builds in
@@ -1734,6 +1734,14 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
         string,
         unknown
       >),
+      ...({
+        [VINEXT_ROUTE_ROOT_CONFIG_PLUGIN_PROPERTY]: {
+          appDir: options.appDir,
+          disableAppRouter: options.disableAppRouter,
+          rscOutDir: options.rscOutDir,
+          ssrOutDir: options.ssrOutDir,
+        },
+      } as Record<string, unknown>),
       ...({ [VINEXT_CACHE_CONFIG_PLUGIN_PROPERTY]: options.cache ?? null } as Record<
         string,
         unknown

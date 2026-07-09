@@ -69,6 +69,7 @@ import {
   type PagesStaticPathsEntry,
 } from "./pages-page-data.js";
 import { createPagesDevAssetUrl, createPagesDevModuleUrl } from "./pages-dev-module-url.js";
+import { createPagesDevHydrationScript } from "./pages-dev-hydration.js";
 import { getManifestFilesForModule } from "./pages-asset-tags.js";
 import { isSerializableProps } from "./pages-serializable-props.js";
 import {
@@ -758,7 +759,23 @@ export function createSSRHandler(
         return;
       }
       // No route matched — try to render custom 404 page
-      await renderErrorPage(server, runner, req, res, url, pagesDir, 404, undefined, matcher);
+      const requestContext = createRequestContext();
+      await runWithRequestContext(requestContext, async () => {
+        await _alsRegistration;
+        await renderErrorPage(
+          server,
+          runner,
+          req,
+          res,
+          url,
+          pagesDir,
+          404,
+          undefined,
+          matcher,
+          undefined,
+          reactStrictMode,
+        );
+      });
       return;
     }
 
@@ -975,6 +992,8 @@ export function createSSRHandler(
               404,
               routerShim.wrapWithRouterContext,
               matcher,
+              undefined,
+              reactStrictMode,
             );
             return;
           }
@@ -1140,6 +1159,9 @@ export function createSSRHandler(
               pagesDir,
               404,
               routerShim.wrapWithRouterContext,
+              undefined,
+              undefined,
+              reactStrictMode,
             );
             return;
           }
@@ -1591,6 +1613,9 @@ export function createSSRHandler(
               pagesDir,
               404,
               routerShim.wrapWithRouterContext,
+              undefined,
+              undefined,
+              reactStrictMode,
             );
             return;
           }
@@ -1832,83 +1857,13 @@ export function createSSRHandler(
           },
         };
 
-        // Hydration entry: inline script that imports the page and hydrates.
-        // Stores the React root and page loader for client-side navigation.
-        const hydrationScript = `
-<script type="module"${nonceAttr}>
-import "vinext/instrumentation-client";
-import React from "react";
-import { hydrateRoot } from "react-dom/client";
-import Router, { wrapWithRouterContext, _initializePagesRouterReadyFromNextData } from "next/router";
-
-const nextDataElement = document.getElementById("__NEXT_DATA__");
-if (nextDataElement?.textContent) {
-  window.__NEXT_DATA__ = JSON.parse(nextDataElement.textContent);
-  window.__VINEXT_LOCALE__ = window.__NEXT_DATA__.locale;
-  window.__VINEXT_LOCALES__ = window.__NEXT_DATA__.locales;
-  window.__VINEXT_DEFAULT_LOCALE__ = window.__NEXT_DATA__.defaultLocale;
-}
-const nextData = window.__NEXT_DATA__;
-_initializePagesRouterReadyFromNextData(nextData);
-const props = nextData.props && typeof nextData.props === "object" ? nextData.props : {};
-const rawPageProps = props.pageProps;
-const pageProps = rawPageProps && typeof rawPageProps === "object" ? rawPageProps : {};
-window.__VINEXT_PAGE_LOADERS__ = { [nextData.page]: () => import("${pageModuleSource}") };
-window.__VINEXT_APP_LOADER__ = ${appModuleSource ? `() => import("${appModuleSource}")` : "undefined"};
-// reactStrictMode flag — read by wrapWithRouterContext so the <React.StrictMode>
-// wrap is applied on initial hydration and every navigation (matches Next.js).
-window.__VINEXT_REACT_STRICT_MODE__ = ${JSON.stringify(reactStrictMode === true)};
-
-async function hydrate() {
-  let hydrateRootOptions;
-  if (import.meta.env.DEV) {
-    const overlay = await import("vinext/dev-error-overlay");
-    overlay.installDevErrorOverlay();
-    overlay.installViteHmrErrorHandler(import.meta.hot);
-    overlay.reportInitialDevServerErrors();
-    hydrateRootOptions = {
-      onCaughtError: overlay.devOnCaughtError,
-      onUncaughtError: overlay.devOnUncaughtError,
-    };
-  }
-
-  const pageModule = await import("${pageModuleSource}");
-  const PageComponent = pageModule.default;
-  let element;
-  ${
-    appModuleSource
-      ? `
-  const appModule = await import("${appModuleSource}");
-  const AppComponent = appModule.default;
-  window.__VINEXT_APP__ = AppComponent;
-  element = React.createElement(AppComponent, {
-    ...props,
-    Component: PageComponent,
-    pageProps: rawPageProps,
-    router: Router,
-  });
-  `
-      : `
-  element = React.createElement(PageComponent, pageProps);
-  `
-  }
-  let resolveHydrationCommit;
-  const hydrationCommitted = new Promise((resolve) => { resolveHydrationCommit = resolve; });
-  element = wrapWithRouterContext(element, resolveHydrationCommit);
-  const root = hydrateRoot(document.getElementById("__next"), element, hydrateRootOptions);
-  window.__VINEXT_ROOT__ = root;
-  await hydrationCommitted;
-  const hydratedAt = performance.now();
-  window.__VINEXT_HYDRATED_AT = hydratedAt;
-  window.__NEXT_HYDRATED = true;
-  window.__NEXT_HYDRATED_AT = hydratedAt;
-  window.__NEXT_HYDRATED_CB?.();
-  if (nextData.isFallback) {
-    await Router.replace(window.location.pathname + window.location.search + window.location.hash, undefined, { _h: 1, scroll: false });
-  }
-}
-hydrate();
-</script>`;
+        const hydrationScript = createPagesDevHydrationScript({
+          appModuleSource,
+          pageModuleSource,
+          reactStrictMode: reactStrictMode === true,
+          replaceFallbackRoute: true,
+          scriptNonce,
+        });
 
         const nextDataScript = `<script id="__NEXT_DATA__" type="application/json"${nonceAttr}>${safeJsonStringify(
           {
@@ -2116,6 +2071,7 @@ hydrate();
             undefined,
             matcher,
             e instanceof Error ? e : new Error(String(e)),
+            reactStrictMode,
           );
         } catch (fallbackErr) {
           // If error page itself fails, fall back to plain text.
@@ -2150,6 +2106,7 @@ async function renderErrorPage(
   wrapWithRouterContext?: ((el: React.ReactElement) => React.ReactElement) | null,
   fileMatcher?: ValidFileMatcher,
   err?: Error,
+  reactStrictMode = false,
 ): Promise<void> {
   attachPagesRequestCookies(req);
   const matcher = fileMatcher ?? createValidFileMatcher();
@@ -2158,11 +2115,13 @@ async function renderErrorPage(
     statusCode === 404 ? ["404", "_error"] : statusCode === 500 ? ["500", "_error"] : ["_error"];
 
   for (const candidate of candidates) {
+    // oxlint-disable-next-line typescript/no-explicit-any
+    let errorRouterShim: any = null;
     try {
       const errorAssetPath = findFileWithExts(pagesDir, candidate, matcher);
-      if (!errorAssetPath) continue;
+      if (!errorAssetPath && candidate !== "_error") continue;
 
-      const errorModule = await importModule(runner, errorAssetPath);
+      const errorModule = await importModule(runner, errorAssetPath ?? "next/error");
       const ErrorComponent = errorModule.default;
       if (!ErrorComponent) continue;
 
@@ -2181,27 +2140,62 @@ async function renderErrorPage(
       }
 
       const createElement = React.createElement;
+      res.statusCode = statusCode;
+      const errorPage = candidate === "_error" ? "/_error" : `/${candidate}`;
+      const errorRouter = {
+        pathname: errorPage,
+        query: parseQuery(url),
+        asPath: url,
+      };
+      try {
+        errorRouterShim = await importModule(runner, "next/router");
+        if (typeof errorRouterShim.setSSRContext === "function") {
+          errorRouterShim.setSSRContext({
+            ...errorRouter,
+            navigationIsReady: true,
+          });
+        }
+      } catch {
+        // router shim not available — continue without it
+      }
+      const serverRouter = errorRouterShim?.default ?? errorRouter;
+      const wrapFn = wrapWithRouterContext ?? errorRouterShim?.wrapWithRouterContext;
       const initialErrorProps = await loadPagesGetInitialProps(ErrorComponent, {
         req,
         res,
         err,
-        pathname: candidate === "_error" ? "/_error" : `/${candidate}`,
-        query: parseQuery(url),
+        pathname: errorPage,
+        query: errorRouter.query,
         asPath: url,
       });
       if (res.headersSent || res.writableEnded) return;
       const errorProps = { ...initialErrorProps, statusCode };
-
-      // If the caller didn't supply wrapWithRouterContext, load it now.
-      // runner.import() caches internally so the cost is negligible.
-      let wrapFn = wrapWithRouterContext;
-      if (!wrapFn) {
-        try {
-          const errRouterShim = await importModule(runner, "next/router");
-          wrapFn = errRouterShim.wrapWithRouterContext;
-        } catch {
-          // router shim not available — continue without it
-        }
+      let renderProps: Record<string, unknown>;
+      if (AppComponent && hasPagesGetInitialProps(AppComponent)) {
+        const appInitialProps = await loadPagesGetInitialProps(AppComponent, {
+          AppTree: (appTreeProps: Record<string, unknown>) => {
+            const appTree = createElement(AppComponent, {
+              ...appTreeProps,
+              Component: ErrorComponent,
+              router: serverRouter,
+            });
+            return wrapFn ? wrapFn(appTree) : appTree;
+          },
+          Component: ErrorComponent,
+          router: serverRouter,
+          ctx: {
+            req,
+            res,
+            err,
+            pathname: errorPage,
+            query: errorRouter.query,
+            asPath: url,
+          },
+        });
+        if (res.headersSent || res.writableEnded) return;
+        renderProps = appInitialProps ?? {};
+      } else {
+        renderProps = { pageProps: errorProps };
       }
 
       // Try custom _document
@@ -2225,8 +2219,9 @@ async function renderErrorPage(
       ): React.ReactElement => {
         let errorElement: React.ReactElement = FinalApp
           ? createElement(FinalApp, {
+              ...renderProps,
               Component: FinalComponent,
-              pageProps: errorProps,
+              router: serverRouter,
             })
           : createElement(FinalComponent, errorProps);
         if (wrapFn) errorElement = wrapFn(errorElement);
@@ -2245,20 +2240,44 @@ async function renderErrorPage(
         [appAssetPath, errorAssetPath],
         nonceAttr,
       );
+      const errorModuleSource = errorAssetPath
+        ? createPagesDevModuleUrl(server.config.root, errorAssetPath, "/")
+        : "next/error";
+      const appModuleSource = appAssetPath
+        ? createPagesDevModuleUrl(server.config.root, appAssetPath, "/")
+        : null;
+      const errorNextDataScript = `<script id="__NEXT_DATA__" type="application/json"${nonceAttr}>${safeJsonStringify(
+        {
+          props: renderProps,
+          page: errorPage,
+          query: parseQuery(url),
+          buildId: process.env.__VINEXT_BUILD_ID,
+          isFallback: false,
+        },
+      )}</script>`;
+      const errorHydrationScript = createPagesDevHydrationScript({
+        appModuleSource,
+        forceRouterReady: true,
+        normalizePageProps: false,
+        pageModuleSource: errorModuleSource,
+        reactStrictMode: reactStrictMode === true,
+        scriptNonce,
+        setPagePatternsFromNextData: true,
+      });
+      const errorScripts = `${errorNextDataScript}\n${errorHydrationScript}`;
 
       if (DocumentComponent) {
-        const errorPathname = candidate === "_error" ? "/_error" : `/${candidate}`;
         await streamPageToResponse(res, element, {
           url,
           server,
           fontHeadHTML: "",
           assetHeadHTML,
-          scripts: "",
+          scripts: errorScripts,
           DocumentComponent,
           statusCode,
           documentContext: {
             err,
-            pathname: errorPathname,
+            pathname: errorPage,
             query: parseQuery(url),
             asPath: url,
             req,
@@ -2293,6 +2312,7 @@ async function renderErrorPage(
 </head>
 <body>
   <div id="__next">${bodyHtml}</div>
+  ${errorScripts}
 </body>
 </html>`;
         const transformedHtml = await server.transformIndexHtml(url, html);
@@ -2304,14 +2324,15 @@ async function renderErrorPage(
       if (res.headersSent || res.writableEnded) return;
       // This candidate doesn't exist, try next
       continue;
+    } finally {
+      if (typeof errorRouterShim?.setSSRContext === "function") {
+        errorRouterShim.setSSRContext(null);
+      }
     }
   }
 
-  // No custom error page found — fall back to vinext's default. The 404 case
-  // renders the canonical Next.js HTML body (matching `pages/_error.tsx`) so
-  // dev-server responses include "This page could not be found." just like
-  // production. Other status codes keep the plain-text fallback because
-  // Next.js's `_error.tsx` defaults already handle those cases when present.
+  // Defensive fallback for a missing or invalid framework error module. The
+  // normal no-user-error-file path resolves `next/error` in the candidate loop.
   if (statusCode === 404) {
     const defaultResponse = buildDefaultPagesNotFoundResponse();
     const headers: Record<string, string> = {};

@@ -8,6 +8,20 @@
 
 declare module "next" {
   import type { IncomingMessage, ServerResponse } from "node:http";
+  import type { ParsedUrlQuery } from "node:querystring";
+  import type { ComponentType } from "react";
+  export type NextPageContext = {
+    err?: (Error & { statusCode?: number }) | null;
+    req?: IncomingMessage;
+    res?: ServerResponse;
+    pathname: string;
+    query: ParsedUrlQuery;
+    asPath?: string;
+    locale?: string;
+    locales?: readonly string[];
+    defaultLocale?: string;
+    AppTree: ComponentType<{ pageProps: unknown; [name: string]: unknown }>;
+  };
   type Env = { [key: string]: string | undefined };
   export type PreviewData = string | false | object | undefined;
   // oxlint-disable-next-line typescript/consistent-type-definitions
@@ -430,16 +444,37 @@ declare module "next/legacy/image" {
 }
 
 declare module "next/error" {
+  import type { IncomingMessage, ServerResponse } from "node:http";
+  import type { ParsedUrlQuery } from "node:querystring";
+  import * as React from "react";
   import { ComponentType, ReactNode } from "react";
 
-  type ErrorProps = {
+  type ErrorPageContext = {
+    err?: (Error & { statusCode?: number }) | null;
+    req?: IncomingMessage;
+    res?: ServerResponse;
+    pathname: string;
+    query: ParsedUrlQuery;
+    asPath?: string;
+    locale?: string;
+    locales?: readonly string[];
+    defaultLocale?: string;
+    AppTree: ComponentType<{ pageProps: unknown; [name: string]: unknown }>;
+  };
+
+  export type ErrorProps = {
     statusCode: number;
+    hostname?: string;
     title?: string;
     withDarkMode?: boolean;
   };
 
-  const ErrorComponent: ComponentType<ErrorProps>;
-  export default ErrorComponent;
+  export default class ErrorComponent<P = {}> extends React.Component<P & ErrorProps> {
+    static displayName: string;
+    static getInitialProps: (context: ErrorPageContext) => ErrorProps | Promise<ErrorProps>;
+    static origGetInitialProps: (context: ErrorPageContext) => ErrorProps | Promise<ErrorProps>;
+    render(): React.ReactNode;
+  }
 
   export type ErrorInfo = {
     error: unknown;

@@ -14317,6 +14317,56 @@ describe("next/compat/router shim", () => {
     }
   });
 
+  it("removes basePath and locale from the client Pages navigation pathname", async () => {
+    // Next.js derives PathnameContext from the locale-free router.asPath:
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/shared/lib/router/adapters.tsx
+    const previousWindow = (globalThis as any).window;
+    const previousBasePath = process.env.__NEXT_ROUTER_BASEPATH;
+    process.env.__NEXT_ROUTER_BASEPATH = "/app";
+    (globalThis as any).window = {
+      location: {
+        pathname: "/app/nl/dynamic/known",
+        search: "?utm=token",
+        hash: "",
+        href: "http://localhost/app/nl/dynamic/known?utm=token",
+        hostname: "localhost",
+        origin: "http://localhost",
+      },
+      history: { state: null, replaceState: vi.fn() },
+      addEventListener: vi.fn(),
+      __NEXT_DATA__: {
+        page: "/dynamic/[slug]",
+        query: { slug: "known" },
+        gsp: true,
+        isFallback: false,
+        __vinext: {
+          routeUrl: "/dynamic/known",
+        },
+      },
+      __VINEXT_LOCALE__: "nl",
+      __VINEXT_LOCALES__: ["en", "fr", "nl"],
+      __VINEXT_DEFAULT_LOCALE__: "en",
+      __VINEXT_PAGE_LOADERS__: {
+        "/dynamic/[slug]": async () => ({ default: () => null }),
+      },
+    };
+
+    try {
+      vi.resetModules();
+      const { getPagesNavigationContext } = await import("../packages/vinext/src/shims/router.js");
+      const context = getPagesNavigationContext();
+      expect(context?.pathname).toBe("/dynamic/known");
+      expect(context?.params).toBeNull();
+      expect(context?.searchParams.toString()).toBe("");
+    } finally {
+      vi.resetModules();
+      if (previousBasePath === undefined) delete process.env.__NEXT_ROUTER_BASEPATH;
+      else process.env.__NEXT_ROUTER_BASEPATH = previousBasePath;
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
+  });
+
   it("server Pages navigation context prefers the resolved URL over stale query params", async () => {
     const { getPagesNavigationContext, setSSRContext } =
       await import("../packages/vinext/src/shims/router.js");
@@ -15028,6 +15078,49 @@ describe("Pages Router concurrent navigation", () => {
 
     return { win, pushState, replaceState, render };
   }
+
+  it("uses serialized GSP query with the live asPath until Pages Router readiness", async () => {
+    const previousWindow = (globalThis as any).window;
+    const { win } = createNavWindow();
+    Object.assign(win.location, {
+      pathname: "/isr-query-hydration",
+      search: "?utm=token",
+      href: "http://localhost/isr-query-hydration?utm=token",
+    });
+    (win as any).__NEXT_DATA__ = {
+      page: "/isr-query-hydration",
+      query: {},
+      gsp: true,
+      isFallback: false,
+      props: { pageProps: {} },
+      __vinext: {
+        pageModuleUrl: "/@fs/pages/isr-query-hydration.js",
+        routeUrl: "/isr-query-hydration",
+      },
+    };
+    (globalThis as any).window = win;
+
+    try {
+      vi.resetModules();
+      const routerModule = await import("../packages/vinext/src/shims/router.js");
+      expect(routerModule.default.isReady).toBe(false);
+      expect(routerModule.default.query).toEqual({});
+      expect(routerModule.default.asPath).toBe("/isr-query-hydration?utm=token");
+
+      expect(routerModule._markPagesRouterReady()).toBe(true);
+      (win as any).__NEXT_HYDRATED = true;
+      expect(routerModule.default.isReady).toBe(true);
+      expect(routerModule.default.query).toEqual({ utm: "token" });
+      expect(routerModule.default.asPath).toBe("/isr-query-hydration?utm=token");
+    } finally {
+      vi.resetModules();
+      if (previousWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = previousWindow;
+      }
+    }
+  });
 
   it("exposes locale-free asPath for a localized browser URL", async () => {
     // Ported from Next.js: test/e2e/i18n-support-catchall/i18n-support-catchall.test.ts

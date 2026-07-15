@@ -1,16 +1,14 @@
 import { draftMode } from "next/headers";
-import { NextResponse } from "next/server";
 
 export async function GET() {
-  const draft = await draftMode();
-  draft.disable();
-  return NextResponse.json(
-    { disabled: true },
+  (await draftMode()).enable();
+  return Response.json(
+    { enabled: true },
     {
       headers: {
         "cdn-cache-control": "public, s-maxage=60",
         "cloudflare-cdn-cache-control": "public, s-maxage=60",
-        "cache-tag": "draft-disable",
+        "cache-tag": "draft-enable",
       },
     },
   );

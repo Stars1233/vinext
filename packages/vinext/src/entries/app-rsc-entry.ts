@@ -814,6 +814,7 @@ export default createAppRscHandler({
           observeMetadataSearchParamsAccess: buildOptions?.observeMetadataSearchParamsAccess === true,
           observePageSearchParamsAccess: buildOptions?.observePageSearchParamsAccess === true,
           serveStreamingMetadata: buildOptions?.serveStreamingMetadata,
+          isProduction: process.env.NODE_ENV === "production",
         }, layoutParamAccess, displayPathname);
       },
       clientReuseManifest,
@@ -922,6 +923,7 @@ export default createAppRscHandler({
         const __activeIntercept = findIntercept(interceptionPathname, interceptionContext);
         return __fallbackRenderer.renderHttpAccessFallback(route, statusCode, isRscRequest, request, opts, scriptNonce, currentMiddlewareContext, {
           isEdgeRuntime: __isEdgeRuntime(__segmentConfig.runtime),
+          routePathname: cleanPathname,
           sourcePageSegments: __activeIntercept?.slotKey === __SIBLING_PAGE_INTERCEPT_SLOT_KEY
             ? __activeIntercept.sourcePageSegments
             : null,
@@ -1178,6 +1180,9 @@ export default createAppRscHandler({
           interceptLayouts: intercept.interceptLayouts,
           interceptLayoutSegments: intercept.interceptLayoutSegments,
           interceptBranchSegments: intercept.interceptBranchSegments,
+          interceptNotFoundBranchSegments: intercept.interceptNotFoundBranchSegments,
+          interceptNotFound: intercept.notFound,
+          interceptNotFoundTreePosition: intercept.notFoundTreePosition,
           interceptSlotId: intercept.slotId,
           interceptSlotKey: intercept.slotKey,
           interceptSourceMatchedUrl: interceptionContext,

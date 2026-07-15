@@ -466,6 +466,41 @@ describe("appRouter - route discovery", () => {
     expect(homeRoute!.layouts[0]).toContain("layout.tsx");
   });
 
+  it("records the owner position of a not-found boundary without a layout", async () => {
+    await withTempDir("vinext-app-not-found-owner-", async (tmpDir) => {
+      const appDir = path.join(tmpDir, "app");
+      await mkdir(path.join(appDir, "[locale]", "posts", "[slug]"), { recursive: true });
+      await writeFile(path.join(appDir, "layout.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "[locale]", "not-found.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "[locale]", "posts", "[slug]", "page.tsx"), EMPTY_PAGE);
+
+      invalidateAppRouteCache();
+      const routes = await appRouter(appDir);
+      const route = routes.find((candidate) => candidate.pattern === "/:locale/posts/:slug");
+
+      expect(route?.notFoundPath).toBe(canonical(appDir, "[locale]/not-found.tsx"));
+      expect(route?.notFoundTreePosition).toBe(1);
+    });
+  });
+
+  it("records auth boundary owner positions without co-located layouts", async () => {
+    await withTempDir("vinext-app-auth-owner-", async (tmpDir) => {
+      const appDir = path.join(tmpDir, "app");
+      await mkdir(path.join(appDir, "[locale]", "posts", "[slug]"), { recursive: true });
+      await writeFile(path.join(appDir, "layout.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "[locale]", "forbidden.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "[locale]", "unauthorized.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "[locale]", "posts", "[slug]", "page.tsx"), EMPTY_PAGE);
+
+      invalidateAppRouteCache();
+      const routes = await appRouter(appDir);
+      const route = routes.find((candidate) => candidate.pattern === "/:locale/posts/:slug");
+
+      expect(route?.forbiddenTreePosition).toBe(1);
+      expect(route?.unauthorizedTreePosition).toBe(1);
+    });
+  });
+
   it("detects dynamic segments", async () => {
     const routes = await appRouter(APP_FIXTURE_DIR);
     const blogRoute = routes.find((r) => r.pattern === "/blog/:slug");
@@ -1232,6 +1267,25 @@ describe("matchAppRoute - URL matching", () => {
     expect(analyticsSlot!.defaultPath).not.toBeNull();
   });
 
+  it("discovers slot-local not-found metadata conventions", async () => {
+    await withTempDir("vinext-app-slot-not-found-", async (tmpDir) => {
+      const appDir = path.join(tmpDir, "app");
+      await mkdir(path.join(appDir, "slot", "@foo"), { recursive: true });
+      await writeFile(path.join(appDir, "slot", "layout.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "slot", "page.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "slot", "@foo", "page.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "slot", "@foo", "not-found.tsx"), EMPTY_PAGE);
+
+      invalidateAppRouteCache();
+      const routes = await appRouter(appDir);
+      const route = routes.find((candidate) => candidate.pattern === "/slot");
+      const slot = route?.parallelSlots.find((candidate) => candidate.name === "foo");
+
+      expect(slot?.notFoundPath).toBe(canonical(appDir, "slot/@foo/not-found.tsx"));
+      expect(slot?.notFoundTreePosition).toBe(0);
+    });
+  });
+
   it("discovers layout.tsx inside parallel slot directories", async () => {
     invalidateAppRouteCache();
     const routes = await appRouter(APP_FIXTURE_DIR);
@@ -1373,6 +1427,120 @@ describe("matchAppRoute - URL matching", () => {
     expect(intercept.targetPattern).toBe("/photos/:id");
     expect(intercept.params).toEqual(["id"]);
     expect(intercept.pagePath).toContain("(...)photos");
+  });
+
+  it("discovers intercept not-found from its branch instead of the ordinary slot branch", async () => {
+    await withTempDir("vinext-app-intercept-not-found-", async (tmpDir) => {
+      const appDir = path.join(tmpDir, "app");
+      const modalDir = path.join(appDir, "@modal");
+
+      await mkdir(path.join(modalDir, "feed"), { recursive: true });
+      await mkdir(path.join(modalDir, "(.)photo", "[id]"), { recursive: true });
+      await mkdir(path.join(appDir, "feed"), { recursive: true });
+      await mkdir(path.join(appDir, "photo", "[id]"), { recursive: true });
+
+      await writeFile(path.join(appDir, "layout.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "page.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "feed", "page.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "photo", "[id]", "page.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(modalDir, "default.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(modalDir, "not-found.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(modalDir, "feed", "page.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(modalDir, "feed", "not-found.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(modalDir, "(.)photo", "[id]", "page.tsx"), EMPTY_PAGE);
+
+      invalidateAppRouteCache();
+      const routes = await appRouter(appDir);
+      const feedRoute = routes.find((route) => route.pattern === "/feed");
+      const modalSlot = feedRoute?.parallelSlots.find((slot) => slot.name === "modal");
+      const intercept = modalSlot?.interceptingRoutes.find(
+        (candidate) => candidate.targetPattern === "/photo/:id",
+      );
+
+      expect(modalSlot?.notFoundPath).toBe(canonical(path.join(modalDir, "feed", "not-found.tsx")));
+      expect(modalSlot?.notFoundTreePosition).toBe(1);
+      expect(intercept?.notFoundPath).toBe(canonical(path.join(modalDir, "not-found.tsx")));
+      expect(intercept?.notFoundBranchSegments).toEqual(["photo", "[id]"]);
+      expect(intercept?.notFoundTreePosition).toBe(0);
+    });
+  });
+
+  it("keeps slot-root not-found ancestry for nested intercept markers", async () => {
+    await withTempDir("vinext-app-nested-intercept-not-found-", async (tmpDir) => {
+      const appDir = path.join(tmpDir, "app");
+      const modalDir = path.join(appDir, "@modal");
+
+      await mkdir(path.join(modalDir, "foo", "qux"), { recursive: true });
+      await mkdir(path.join(modalDir, "foo", "(.)photo", "[id]"), { recursive: true });
+      await mkdir(path.join(modalDir, "foo", "(.)video", "[id]"), { recursive: true });
+      await mkdir(path.join(appDir, "foo", "qux"), { recursive: true });
+      await mkdir(path.join(appDir, "foo", "photo", "[id]"), { recursive: true });
+      await mkdir(path.join(appDir, "foo", "video", "[id]"), { recursive: true });
+
+      await writeFile(path.join(appDir, "layout.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "page.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "foo", "qux", "page.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "foo", "photo", "[id]", "page.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(appDir, "foo", "video", "[id]", "page.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(modalDir, "default.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(modalDir, "not-found.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(modalDir, "foo", "qux", "page.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(modalDir, "foo", "qux", "not-found.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(modalDir, "foo", "(.)photo", "[id]", "page.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(modalDir, "foo", "(.)video", "not-found.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(modalDir, "foo", "(.)video", "[id]", "page.tsx"), EMPTY_PAGE);
+
+      invalidateAppRouteCache();
+      const routes = await appRouter(appDir);
+      const sourceRoute = routes.find((route) => route.pattern === "/foo/qux");
+      const modalSlot = sourceRoute?.parallelSlots.find((slot) => slot.name === "modal");
+      const intercept = modalSlot?.interceptingRoutes.find(
+        (candidate) => candidate.targetPattern === "/foo/photo/:id",
+      );
+      const localIntercept = modalSlot?.interceptingRoutes.find(
+        (candidate) => candidate.targetPattern === "/foo/video/:id",
+      );
+
+      expect(modalSlot?.notFoundPath).toBe(
+        canonical(path.join(modalDir, "foo", "qux", "not-found.tsx")),
+      );
+      expect(modalSlot?.notFoundTreePosition).toBe(2);
+      expect(intercept?.notFoundPath).toBe(canonical(path.join(modalDir, "not-found.tsx")));
+      expect(intercept?.notFoundBranchSegments).toEqual(["foo", "photo", "[id]"]);
+      expect(intercept?.notFoundTreePosition).toBe(0);
+      expect(localIntercept?.notFoundPath).toBe(
+        canonical(path.join(modalDir, "foo", "(.)video", "not-found.tsx")),
+      );
+      expect(localIntercept?.notFoundBranchSegments).toEqual(["foo", "video", "[id]"]);
+      expect(localIntercept?.notFoundTreePosition).toBe(2);
+    });
+  });
+
+  it("keeps source-route not-found ownership for slot-less sibling intercepts", async () => {
+    await withTempDir("vinext-app-sibling-intercept-not-found-", async (tmpDir) => {
+      const appDir = path.join(tmpDir, "app");
+      const sourceDir = path.join(appDir, "[locale]", "feed");
+
+      await mkdir(path.join(sourceDir, "(.)photo", "[id]"), { recursive: true });
+      await mkdir(path.join(sourceDir, "photo", "[id]"), { recursive: true });
+      await writeFile(path.join(appDir, "layout.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(sourceDir, "page.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(sourceDir, "not-found.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(sourceDir, "(.)photo", "[id]", "page.tsx"), EMPTY_PAGE);
+      await writeFile(path.join(sourceDir, "photo", "[id]", "page.tsx"), EMPTY_PAGE);
+
+      invalidateAppRouteCache();
+      const routes = await appRouter(appDir);
+      const sourceRoute = routes.find((route) => route.pattern === "/:locale/feed");
+      const intercept = sourceRoute?.siblingIntercepts.find(
+        (candidate) => candidate.targetPattern === "/:locale/feed/photo/:id",
+      );
+
+      expect(sourceRoute?.notFoundPath).toBe(canonical(path.join(sourceDir, "not-found.tsx")));
+      expect(sourceRoute?.notFoundTreePosition).toBe(2);
+      expect(intercept?.notFoundPath).toBeNull();
+      expect(intercept?.notFoundTreePosition).toBeNull();
+    });
   });
 
   it("discovers intercept layout chains inside parallel slots", async () => {

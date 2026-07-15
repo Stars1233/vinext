@@ -67,6 +67,8 @@ export type VinextHeadersShimState = {
 };
 
 type ConnectionProbeState = {
+  active: boolean;
+  dynamicUsageTarget: VinextHeadersShimState;
   interrupted: boolean;
   interrupt: () => void;
   pending: Promise<never>;
@@ -208,6 +210,67 @@ export function markDynamicUsage(): void {
     return;
   }
   state.dynamicUsageDetected = true;
+  forEachConnectionProbeTarget(state, (target) => {
+    target.dynamicUsageDetected = true;
+  });
+}
+
+function forEachConnectionProbeTarget(
+  state: VinextHeadersShimState,
+  visit: (target: VinextHeadersShimState) => void,
+): void {
+  let target = state.connectionProbe?.dynamicUsageTarget ?? null;
+  const seen = new Set<VinextHeadersShimState>([state]);
+  while (target && !seen.has(target)) {
+    seen.add(target);
+    visit(target);
+    target = target.connectionProbe?.dynamicUsageTarget ?? null;
+  }
+}
+
+function propagateInvalidDynamicUsageError(state: VinextHeadersShimState, error: unknown): void {
+  forEachConnectionProbeTarget(state, (target) => {
+    if (target.invalidDynamicUsageError == null) {
+      target.invalidDynamicUsageError = error;
+    }
+  });
+}
+
+/**
+ * Measure dynamic usage in a child async scope without clearing the parent.
+ * Concurrent work that already belongs to the request (such as deferred
+ * metadata) keeps writing to the parent state and therefore remains visible
+ * to the final cache policy.
+ */
+export async function runWithIsolatedDynamicUsage<T>(
+  fn: () => T | Promise<T>,
+): Promise<{ result: T; dynamicDetected: boolean }> {
+  const runInChildState = async (childState: VinextHeadersShimState) => {
+    const result = await fn();
+    return { result, dynamicDetected: childState.dynamicUsageDetected };
+  };
+
+  if (isInsideUnifiedScope()) {
+    let childState: VinextHeadersShimState | null = null;
+    return await runWithUnifiedStateMutation(
+      (context) => {
+        context.dynamicUsageDetected = false;
+        childState = context;
+      },
+      () => {
+        if (!childState) {
+          throw new Error("Dynamic usage scope was not initialized");
+        }
+        return runInChildState(childState);
+      },
+    );
+  }
+
+  const childState: VinextHeadersShimState = {
+    ..._getState(),
+    dynamicUsageDetected: false,
+  };
+  return await _als.run(childState, () => runInChildState(childState));
 }
 
 export function markRenderRequestApiUsage(kind: RenderRequestApiKind): void {
@@ -224,14 +287,16 @@ export function throwIfStaticGenerationAccessError(): void {
 export async function runWithConnectionProbe<T>(
   fn: () => T | Promise<T>,
 ): Promise<ConnectionProbeResult<T>> {
-  const state = _getState();
-  const previousProbe = state.connectionProbe;
+  const parentState = _getState();
+  const parentInvalidDynamicUsageError = parentState.invalidDynamicUsageError;
   let interruptProbe: () => void = () => {};
   const interrupted = new Promise<ConnectionProbeResult<T>>((resolve) => {
     interruptProbe = () => resolve({ completed: false });
   });
 
   const probe: ConnectionProbeState = {
+    active: true,
+    dynamicUsageTarget: parentState,
     interrupted: false,
     interrupt() {
       if (probe.interrupted) return;
@@ -244,20 +309,64 @@ export async function runWithConnectionProbe<T>(
     pending: new Promise<never>(() => {}),
   };
 
-  state.connectionProbe = probe;
-  try {
-    const completed = Promise.resolve()
-      .then(fn)
-      .then<ConnectionProbeResult<T>>((result) => ({ completed: true, result }));
-    return await Promise.race([completed, interrupted]);
-  } finally {
-    state.connectionProbe = previousProbe;
+  const runInChildState = async (childState: VinextHeadersShimState) => {
+    try {
+      const completed = Promise.resolve()
+        .then(fn)
+        .then<ConnectionProbeResult<T>>((result) => ({ completed: true, result }));
+      return await Promise.race([completed, interrupted]);
+    } finally {
+      probe.active = false;
+      // Async resources created inside this ALS scope retain `childState` after
+      // the probe returns. Restore the inherited probe when nested; otherwise
+      // retain this inactive probe so late dynamic usage can still propagate
+      // to its parent without suspending. Reading the parent at cleanup time
+      // preserves the right lifecycle if an outer probe completed separately.
+      childState.connectionProbe = parentState.connectionProbe ?? probe;
+
+      // Dynamic usage discovered by a speculative probe still classifies the
+      // request, but the probe itself must remain branch-local. In particular,
+      // metadata resolution can already be running in a sibling async branch;
+      // sharing `connectionProbe` would make its connection() call suspend on
+      // a probe it does not belong to.
+      if (childState.dynamicUsageDetected) {
+        parentState.dynamicUsageDetected = true;
+      }
+      if (
+        childState.invalidDynamicUsageError !== parentInvalidDynamicUsageError &&
+        parentState.invalidDynamicUsageError === parentInvalidDynamicUsageError
+      ) {
+        parentState.invalidDynamicUsageError = childState.invalidDynamicUsageError;
+      }
+    }
+  };
+
+  if (isInsideUnifiedScope()) {
+    let childState: VinextHeadersShimState | null = null;
+    return await runWithUnifiedStateMutation(
+      (context) => {
+        context.connectionProbe = probe;
+        childState = context;
+      },
+      () => {
+        if (!childState) {
+          throw new Error("Connection probe scope was not initialized");
+        }
+        return runInChildState(childState);
+      },
+    );
   }
+
+  const childState: VinextHeadersShimState = {
+    ...parentState,
+    connectionProbe: probe,
+  };
+  return await _als.run(childState, () => runInChildState(childState));
 }
 
 export function suspendConnectionProbe(): Promise<never> | null {
   const probe = _getState().connectionProbe;
-  if (!probe) return null;
+  if (!probe?.active) return null;
 
   probe.interrupt();
   return probe.pending;
@@ -350,6 +459,7 @@ export function throwIfInsideCacheScope(apiName: string): void {
       if (cacheCtx) cacheCtx.invalidDynamicUsageError = error;
       const ctx = getRequestContext();
       if (ctx) ctx.invalidDynamicUsageError = error;
+      propagateInvalidDynamicUsageError(_getState(), error);
     } catch {
       // Ignore — best-effort recording for dev diagnostics
     }
@@ -364,6 +474,7 @@ export function throwIfInsideCacheScope(apiName: string): void {
     try {
       const ctx = getRequestContext();
       if (ctx) ctx.invalidDynamicUsageError = error;
+      propagateInvalidDynamicUsageError(_getState(), error);
     } catch {
       // Ignore
     }

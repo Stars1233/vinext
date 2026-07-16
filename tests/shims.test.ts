@@ -22787,7 +22787,9 @@ describe("next/error shim", () => {
     // https://github.com/vercel/next.js/blob/v16.3.0-canary.80/test/e2e/typescript/pages/_error.tsx
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "vinext-next-error-types-"));
     const fixturePath = path.join(tempDir, "_error.tsx");
-    const declarationPath = new URL("../packages/types/next/index.d.ts", import.meta.url).pathname;
+    const declarationPath = fileURLToPath(
+      new URL("../packages/types/next/index.d.ts", import.meta.url),
+    );
 
     try {
       await writeFile(
@@ -22810,8 +22812,9 @@ export default CustomError;
         new URL("bin/tsc", import.meta.resolve("typescript/package.json")),
       );
       const result = spawnSync(
-        tscPath,
+        process.execPath,
         [
+          tscPath,
           fixturePath,
           declarationPath,
           "--ignoreConfig",
@@ -22831,6 +22834,7 @@ export default CustomError;
         { encoding: "utf8" },
       );
 
+      expect(result.error).toBeUndefined();
       expect(result.stdout + result.stderr).toBe("");
       expect(result.status).toBe(0);
     } finally {

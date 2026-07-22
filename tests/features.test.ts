@@ -2939,6 +2939,27 @@ describe("MetadataHead rendering", () => {
     expect(html).toContain('media="(prefers-color-scheme: dark)"');
   });
 
+  it("does not serialize event handlers from icon descriptors", () => {
+    const html = renderMetadataToHtml(
+      {
+        icons: {
+          icon: {
+            url: "/icon.png",
+            onLoad: "alert('unsafe')",
+          } as never,
+        },
+      },
+      "/products",
+      { streamedIconKey: "metadata-icons" },
+    );
+
+    expect(html).toBe(
+      '<link data-vinext-streamed-icon="metadata-icons:0" rel="icon" href="/icon.png">',
+    );
+    expect(html).not.toContain("onLoad");
+    expect(html).not.toContain("onload");
+  });
+
   it("renders single descriptor icon objects", () => {
     const html = renderToStaticMarkup(
       React.createElement(MetadataHead, {
@@ -3446,6 +3467,67 @@ describe("createAppPageRouteBodyMetadata (body-placement canonical)", () => {
 
   it("body placement: returns null when metadata is null", () => {
     expect(createAppPageRouteBodyMetadata(null, "/a", "body", true)).toBeNull();
+  });
+
+  it("body placement: re-inserts streamed icons into the document head", () => {
+    const node = createAppPageRouteBodyMetadata(
+      {
+        icons: {
+          icon: "/favicon.ico",
+          apple: "/apple-touch-icon.png",
+          shortcut: "/shortcut.png",
+          other: [
+            { rel: "apple-touch-icon-precomposed", url: "/precomposed.png" },
+            { rel: "mask-icon", url: "/mask.svg" },
+          ],
+        },
+      },
+      "/icons",
+      "body",
+    );
+    const html = renderToStaticMarkup(node as React.ReactElement);
+
+    expect(html).toMatch(
+      /<link data-vinext-streamed-icon="[^"]+" rel="icon" href="\/favicon\.ico">/,
+    );
+    expect(html).toMatch(
+      /<link data-vinext-streamed-icon="[^"]+" rel="apple-touch-icon" href="\/apple-touch-icon\.png">/,
+    );
+    expect(html).toMatch(
+      /<link data-vinext-streamed-icon="[^"]+" rel="shortcut icon" href="\/shortcut\.png">/,
+    );
+    expect(html).toMatch(
+      /<link data-vinext-streamed-icon="[^"]+" rel="apple-touch-icon-precomposed" href="\/precomposed\.png">/,
+    );
+    expect(html).toMatch(
+      /<link data-vinext-streamed-icon="[^"]+" rel="mask-icon" href="\/mask\.svg">/,
+    );
+    expect(html).toContain(
+      `document.querySelectorAll('body link[rel="icon"], body link[rel="apple-touch-icon"]').forEach(el => document.head.appendChild(el))`,
+    );
+    expect(html).toContain(`const a='data-vinext-streamed-icon'`);
+    expect(html).toContain(`.sort((l,r)=>o(l)-o(r)).forEach(el=>document.head.appendChild(el))`);
+    expect(html).toMatch(/<script>document\.querySelectorAll[\s\S]*<\/script><\/div>$/);
+  });
+
+  it("body placement: includes icon cleanup reconciliation without streamed icons", () => {
+    const node = createAppPageRouteBodyMetadata({ title: "Streamed title" }, "/metadata", "body");
+    const html = renderToStaticMarkup(node as React.ReactElement);
+
+    expect(html).toContain("document.querySelectorAll('body link");
+  });
+
+  it("body placement: applies the request nonce to the parser-time icon script", () => {
+    const node = createAppPageRouteBodyMetadata(
+      { icons: { icon: "/favicon.ico" } },
+      "/icons",
+      "body",
+      false,
+      "test-nonce",
+    );
+    const html = renderToStaticMarkup(node as React.ReactElement);
+
+    expect(html).toMatch(/<script nonce="test-nonce">[\s\S]*<\/script><\/div>$/);
   });
 });
 

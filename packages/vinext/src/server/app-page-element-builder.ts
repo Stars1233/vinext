@@ -148,6 +148,7 @@ export type BuildPageElementsOptions<
   trailingSlash?: boolean;
   /** Serialized next.config `htmlLimitedBots` regexp source. */
   htmlLimitedBots?: string;
+  scriptNonce?: string;
 };
 
 type AppPageNavigationParamModule = {
@@ -593,6 +594,7 @@ export async function buildPageElements<
     resolvedMetadata,
     resolvedMetadataPathname: routePath,
     resolvedViewport,
+    scriptNonce: options.scriptNonce,
     streamingMetadata,
     streamingMetadataOutlet,
     streamingMetadataOutletSuspended: streamGeneratedHead,

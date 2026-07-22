@@ -249,6 +249,7 @@ type HandleServerActionRequestOptions<TRoute> = {
   middlewareContext: AppRscMiddlewareContext;
   mountedSlotsHeader: string | null;
   request: Request;
+  scriptNonce?: string;
   routeMatch: AppRscRouteMatch<TRoute> | null;
   routePathname: string;
   searchParams: URLSearchParams;
@@ -945,6 +946,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
           middlewareContext,
           mountedSlotsHeader,
           request,
+          scriptNonce,
           routeMatch: preActionMatch,
           routePathname: cleanPathnameIsRequestPathname ? requestCleanPathname : cleanPathname,
           searchParams: getResolvedSearchParams(),

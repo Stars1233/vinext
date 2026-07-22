@@ -30,6 +30,8 @@ import {
   type Viewport,
 } from "vinext/shims/metadata";
 import { Children, ParallelSlot, Slot } from "vinext/shims/slot";
+import { StreamedIconsInsertion } from "vinext/shims/streamed-icons";
+import { createInlineScriptTag } from "./html.js";
 import type { AppPageParams } from "./app-page-boundary.js";
 import type { AppLayoutParamAccessTracker } from "./app-layout-param-observation.js";
 import type { ThenableParamsObserver } from "vinext/shims/thenable-params";
@@ -218,6 +220,7 @@ type BuildAppPageRouteElementOptions<
   resolvedMetadata: Metadata | null;
   resolvedMetadataPathname?: string;
   resolvedViewport: Viewport;
+  scriptNonce?: string;
   streamingMetadata?: Promise<Metadata | null> | null;
   streamingMetadataOutlet?: Promise<unknown> | null;
   streamingMetadataOutletSuspended?: boolean;
@@ -651,31 +654,73 @@ function createAppPageRouteHead(
   );
 }
 
+function hasStreamedIcons(metadata: Metadata): boolean {
+  const icons = metadata.icons;
+  if (!icons) return false;
+  if (typeof icons === "string" || icons instanceof URL || Array.isArray(icons)) {
+    return !Array.isArray(icons) || icons.length > 0;
+  }
+  if ("url" in icons) return true;
+  return Boolean(icons.shortcut || icons.icon || icons.apple || icons.other);
+}
+
+function createStreamedIconKey(pathname: string, metadataHtml: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < metadataHtml.length; index++) {
+    hash ^= metadataHtml.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${pathname}:${(hash >>> 0).toString(36)}`;
+}
+
+const REINSERT_STREAMED_ICONS_SCRIPT = `document.querySelectorAll('body link[rel="icon"], body link[rel="apple-touch-icon"]').forEach(el => document.head.appendChild(el));const a='data-vinext-streamed-icon',o=el=>{const m=el.getAttribute(a),i=m.lastIndexOf(':');return Number(m.slice(i+1))};[...document.querySelectorAll('link['+a+']')].sort((l,r)=>o(l)-o(r)).forEach(el=>document.head.appendChild(el))`;
+
 export function createAppPageRouteBodyMetadata(
   metadata: Metadata | null,
   pathname: string,
   metadataPlacement: "body" | "head",
   trailingSlash?: boolean,
+  scriptNonce?: string,
 ): ReactNode {
   if (!metadata || metadataPlacement !== "body") return null;
+  const renderedMetadataHtml = renderMetadataToHtml(metadata, pathname, { trailingSlash });
+  const metadataKey = hasStreamedIcons(metadata)
+    ? createStreamedIconKey(pathname, renderedMetadataHtml)
+    : "";
+  const metadataHtml = metadataKey
+    ? renderMetadataToHtml(metadata, pathname, { trailingSlash, streamedIconKey: metadataKey })
+    : renderedMetadataHtml;
+  const parserInsertedMetadataHtml =
+    metadataHtml + createInlineScriptTag(REINSERT_STREAMED_ICONS_SCRIPT, scriptNonce);
   return (
-    <div
-      hidden
-      dangerouslySetInnerHTML={{
-        __html: renderMetadataToHtml(metadata, pathname, { trailingSlash }),
-      }}
-    />
+    <>
+      <div
+        hidden
+        suppressHydrationWarning
+        dangerouslySetInnerHTML={{
+          __html: parserInsertedMetadataHtml,
+        }}
+      />
+      <StreamedIconsInsertion metadataKey={metadataKey} />
+    </>
   );
 }
 
 async function AppPageStreamingMetadata(props: {
   metadata: Promise<Metadata | null>;
   pathname: string;
+  scriptNonce?: string;
   trailingSlash?: boolean;
 }): Promise<ReactNode> {
   try {
     const metadata = await props.metadata;
-    return createAppPageRouteBodyMetadata(metadata, props.pathname, "body", props.trailingSlash);
+    return createAppPageRouteBodyMetadata(
+      metadata,
+      props.pathname,
+      "body",
+      props.trailingSlash,
+      props.scriptNonce,
+    );
   } catch {
     // The matching outlet below rethrows inside the route's error boundaries.
     // Keeping the tag outlet successful lets already-flushed HTML remain valid.
@@ -887,6 +932,7 @@ export function buildAppPageElements<
       <AppPageStreamingMetadata
         metadata={options.streamingMetadataTags ?? options.streamingMetadata}
         pathname={options.resolvedMetadataPathname ?? options.routePath}
+        scriptNonce={options.scriptNonce}
         trailingSlash={options.trailingSlash}
       />
     );
@@ -1578,6 +1624,7 @@ export function buildAppPageElements<
         options.resolvedMetadataPathname ?? options.routePath,
         metadataPlacement,
         options.trailingSlash,
+        options.scriptNonce,
       )}
       {createAppPageStreamingMetadataBody(streamingMetadataBodyId)}
     </>

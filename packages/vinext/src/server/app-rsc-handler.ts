@@ -328,6 +328,10 @@ type CreateAppRscHandlerOptions<TRoute extends AppRscHandlerRoute> = {
   imageConfig?: ImageConfig;
   isDev: boolean;
   loadPrerenderPagesRoutes?: () => Promise<unknown>;
+  matchInterceptRoute?: (
+    pathname: string,
+    sourcePathname: string,
+  ) => AppRscRouteMatch<TRoute> | null;
   matchRoute: (pathname: string) => AppRscRouteMatch<TRoute> | null;
   matchRequestRoute?: (pathname: string) => AppRscRouteMatch<TRoute> | null;
   runMiddleware?: (options: RunAppMiddlewareOptions) => Promise<ApplyAppMiddlewareResult>;
@@ -871,7 +875,22 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   // where the second `setRootParams` call replaces this value before rendering.
   // Out-of-basePath Server Actions resolve those late rewrites above so this
   // match already uses their claimed destination.
-  const preActionMatch = filesystemRouteEligible ? matchCleanPathname() : null;
+  // Interception-only RSC targets promote their source route at this same
+  // boundary so Server Action rerenders receive the same route and params as
+  // the subsequent page dispatch. Document requests remain direct-route-only.
+  const directPreActionMatch = filesystemRouteEligible ? matchCleanPathname() : null;
+  const preActionRoutePathname = cleanPathnameIsRequestPathname
+    ? requestCleanPathname
+    : cleanPathname;
+  const interceptionPreActionMatch =
+    filesystemRouteEligible &&
+    directPreActionMatch === null &&
+    isRscRequest &&
+    interceptionContextHeader !== null
+      ? (options.matchInterceptRoute?.(preActionRoutePathname, interceptionContextHeader) ?? null)
+      : null;
+  const preActionMatch = directPreActionMatch ?? interceptionPreActionMatch;
+  const isInterceptionMatch = interceptionPreActionMatch !== null;
   if (preActionMatch) {
     setRootParams(pickRootParams(preActionMatch.params, preActionMatch.route.rootParamNames));
   }
@@ -948,7 +967,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
           request,
           scriptNonce,
           routeMatch: preActionMatch,
-          routePathname: cleanPathnameIsRequestPathname ? requestCleanPathname : cleanPathname,
+          routePathname: preActionRoutePathname,
           searchParams: getResolvedSearchParams(),
         })
       : null;
@@ -963,7 +982,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   ): Promise<Response | null> => {
     if (!filesystemRouteEligible) return null;
     const response =
-      match === null || match.route.isDynamic
+      !isInterceptionMatch && (match === null || match.route.isDynamic)
         ? ((await options.renderPagesFallback?.({
             appRouteMatch: match ?? null,
             allowRscDocumentFallback: didMiddlewareRewritePathname,
@@ -992,7 +1011,7 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
     options.clearRequestContext();
     return staticPagesFallbackResponse;
   }
-  if (!resolvedLateRewritesForAction && (!match || match.route.isDynamic)) {
+  if (!isInterceptionMatch && !resolvedLateRewritesForAction && (!match || match.route.isDynamic)) {
     for (const rewrite of options.configRewrites.afterFiles) {
       const afterFilesRewrite = await applyRewrite(
         {

@@ -1889,7 +1889,7 @@ export default function vinext(options: VinextOptions = {}): PluginOption[] {
       transform: {
         filter: { id: /\.m?js(?:\?.*)?$/ },
         async handler(code: string, id: string) {
-          const cleanId = id.split("?")[0];
+          const cleanId = toSlash(stripViteModuleQuery(id));
 
           // vinext's published runtime is already compiled by tsdown. Workspace
           // symlinks resolve these files outside node_modules, so skip them

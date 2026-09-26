@@ -29,6 +29,7 @@ import {
   hasViteConfig,
 } from "./utils/project.js";
 import {
+  compactResourceName,
   setupCloudflarePlatform,
   usesCommonJsViteConfig,
   validateCloudflarePlatformSetup,
@@ -163,6 +164,7 @@ export function addScripts(
   options: {
     deployResponseStore?: boolean;
     warmCdnCache?: boolean;
+    experimentalCf?: boolean;
     scriptNames?: "namespaced" | "standard";
   } = {},
 ): string[] {
@@ -190,20 +192,27 @@ export function addScripts(
     addScript(
       "start",
       platform === "cloudflare"
-        ? "wrangler dev --config dist/server/wrangler.json"
+        ? options.experimentalCf
+          ? "vite preview"
+          : "wrangler dev --config dist/server/wrangler.json"
         : "vinext start",
     );
 
     if (platform === "cloudflare") {
       addScript(
         "deploy",
-        options.warmCdnCache
-          ? "vinext-cloudflare deploy --config dist/server/wrangler.json --experimental-warm-cdn-cache"
-          : "vinext-cloudflare deploy --config dist/server/wrangler.json",
+        options.experimentalCf
+          ? options.warmCdnCache
+            ? "vinext-cloudflare deploy --experimental-warm-cdn-cache"
+            : "vinext-cloudflare deploy"
+          : options.warmCdnCache
+            ? "vinext-cloudflare deploy --config dist/server/wrangler.json --experimental-warm-cdn-cache"
+            : "vinext-cloudflare deploy --config dist/server/wrangler.json",
       );
       if (options.deployResponseStore && !pkg.scripts["deploy:response-store"]) {
-        pkg.scripts["deploy:response-store"] =
-          "wrangler deploy --config wrangler.response-store.jsonc";
+        pkg.scripts["deploy:response-store"] = options.experimentalCf
+          ? `cf deploy --prebuilt --mode production --worker ${compactResourceName(detectProject(root).projectName, "-response-store", 63)}`
+          : "wrangler deploy --config wrangler.response-store.jsonc";
         added.push("deploy:response-store");
       }
     }
@@ -244,7 +253,13 @@ export function getInitDependencyGroups(
     ) {
       dependencies.push("@cloudflare/workers-response-store");
     }
-    devDependencies.push("@cloudflare/vite-plugin", "wrangler");
+    if (cloudflare?.experimentalCf) {
+      devDependencies[0] = "vite@8.3.0";
+      // V2 SHA prereleases are not chronological semver versions; follow the beta tag.
+      devDependencies.push("@cloudflare/vite-plugin@beta", "cf@latest");
+    } else {
+      devDependencies.push("@cloudflare/vite-plugin", "wrangler");
+    }
   }
   return { dependencies, devDependencies };
 }
@@ -268,7 +283,8 @@ export function isDepInstalled(root: string, dep: string): boolean {
       ...pkg.devDependencies,
       ...pkg.peerDependencies,
     };
-    return dep in allDeps;
+    const { name, version, hasExplicitVersion } = parseDependencySpecifier(dep);
+    return name in allDeps && (!hasExplicitVersion || allDeps[name] === version);
   } catch {
     return false;
   }
@@ -371,7 +387,7 @@ async function installDeps(
   const baseCmd = detectPackageManager(root);
   // Strip " -D" for non-dev installs (keeps deps in "dependencies", not "devDependencies")
   const installCmd = dev ? baseCmd : baseCmd.replace(/ -D$/, "");
-  const depsStr = deps.join(" ");
+  const depsStr = deps.map((dep) => JSON.stringify(dep)).join(" ");
 
   return (
     (await exec(`${installCmd} ${depsStr}`, {
@@ -388,7 +404,11 @@ async function installDeps(
  * Creates the file if it doesn't exist. Returns true if the file was modified
  * (or created), false if all entries were already present.
  */
-export function updateGitignore(root: string, platform: InitPlatform = "node"): boolean {
+export function updateGitignore(
+  root: string,
+  platform: InitPlatform = "node",
+  experimentalCf = false,
+): boolean {
   const gitignorePath = path.join(root, ".gitignore");
   const entries = [
     {
@@ -399,11 +419,19 @@ export function updateGitignore(root: string, platform: InitPlatform = "node"): 
       entry: ".vinext/",
       coveredBy: new Set(["/.vinext/", "/.vinext", ".vinext/", ".vinext"]),
     },
-    ...(platform === "cloudflare"
+    ...(platform === "cloudflare" && !experimentalCf
       ? [
           {
             entry: ".wrangler/",
             coveredBy: new Set(["/.wrangler/", "/.wrangler", ".wrangler/", ".wrangler"]),
+          },
+        ]
+      : []),
+    ...(experimentalCf
+      ? [
+          {
+            entry: ".cloudflare/",
+            coveredBy: new Set(["/.cloudflare/", "/.cloudflare", ".cloudflare/", ".cloudflare"]),
           },
         ]
       : []),
@@ -591,6 +619,7 @@ export async function init(options: InitOptions): Promise<InitResult> {
       options.cloudflare?.cdnCache === "response-store" &&
       (options.cloudflare.responseStoreMode ?? "service-binding") === "service-binding",
     warmCdnCache: options.cloudflare?.warmCdnCache ?? false,
+    experimentalCf: options.cloudflare?.experimentalCf ?? false,
     scriptNames: options.scriptNames,
   });
 
@@ -614,7 +643,7 @@ export async function init(options: InitOptions): Promise<InitResult> {
 
   // ── Step 5: Update .gitignore ──────────────────────────────────────────
 
-  const updatedGitignore = updateGitignore(root, platform);
+  const updatedGitignore = updateGitignore(root, platform, options.cloudflare?.experimentalCf);
 
   // ── Step 6: Install dependencies last ──────────────────────────────────
 
@@ -773,7 +802,9 @@ export async function init(options: InitOptions): Promise<InitResult> {
       : "";
   const startCommandDescription =
     platform === "cloudflare"
-      ? "Start the built Worker locally with Wrangler"
+      ? options.cloudflare?.experimentalCf
+        ? "Preview the built Worker locally"
+        : "Start the built Worker locally with Wrangler"
       : "Start vinext production server";
 
   console.log(`
